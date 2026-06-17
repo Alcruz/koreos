@@ -1,41 +1,46 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -e
 
-# Simple helper to run qemu-system-aarch64 with common defaults.
-# Usage: scripts/run-qemu.sh [kernel-image] [initramfs.img] [optional.dtb]
+KERNEL_BIN="./build/kernel.bin"
+QEMU_CMD="qemu-system-aarch64"
 
-KERNEL=${1:-build/kernel/Image}
-INITRD=${2:-build/initramfs.img}
-DTB=${3:-}
-MEM=${MEM:-1024}
-CPU=${CPU:-cortex-a57}
-SMP=${SMP:-2}
-
-if [ ! -f "$KERNEL" ]; then
-  echo "Kernel not found: $KERNEL"
-  exit 1
+if [ ! -f "$KERNEL_BIN" ]; then
+    echo "Error: $KERNEL_BIN not found. Run 'make kernel' first."
+    exit 1
 fi
 
-if [ ! -f "$INITRD" ]; then
-  echo "Initramfs not found: $INITRD"
-  exit 1
+if ! command -v "$QEMU_CMD" &> /dev/null; then
+    echo "Error: $QEMU_CMD not found. Install QEMU for ARM64."
+    exit 1
 fi
 
-CMD=(qemu-system-aarch64)
-CMD+=( -machine virt )
-CMD+=( -cpu "$CPU" )
-CMD+=( -smp "$SMP" )
-CMD+=( -m "$MEM" )
-CMD+=( -nographic )
-CMD+=( -kernel "$KERNEL" )
-CMD+=( -initrd "$INITRD" )
-CMD+=( -append "console=ttyAMA0 root=/dev/ram rw" )
-CMD+=( -netdev user,id=net0 )
-CMD+=( -device virtio-net-device,netdev=net0 )
+echo "Booting Koreos on QEMU virt..."
+echo "========================================"
 
-if [ -n "$DTB" ] && [ -f "$DTB" ]; then
-  CMD+=( -dtb "$DTB" )
+# Run QEMU in background with serial output to file
+rm -f /tmp/qemu-serial.log
+timeout 5 $QEMU_CMD \
+    -no-user-config -nodefaults \
+    -machine virt \
+    -cpu cortex-a57 \
+    -m 512M \
+    -kernel "$KERNEL_BIN" \
+    -serial file:/tmp/qemu-serial.log \
+    "$@" 2>&1 &
+
+QEMU_PID=$!
+sleep 2
+
+# Check if process still running
+if ps -p $QEMU_PID > /dev/null 2>&1; then
+    kill -9 $QEMU_PID 2>/dev/null || true
 fi
 
-echo "Running: ${CMD[*]}"
-exec "${CMD[@]}"
+echo ""
+echo "Serial output:"
+echo "========================================"
+if [ -f /tmp/qemu-serial.log ] && [ -s /tmp/qemu-serial.log ]; then
+    cat /tmp/qemu-serial.log
+else
+    echo "(No serial output written)"
+fi

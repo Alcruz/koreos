@@ -6,8 +6,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
     add-apt-repository universe && \
     apt-get update && apt-get install -y --no-install-recommends \
       gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu \
-      qemu-user-static qemu-system-aarch64 qemu-efi device-tree-compiler ccache build-essential python3 git sudo \
-    && rm -rf /var/lib/apt/lists/*
+      qemu-user-static qemu-system-aarch64 qemu-efi qemu-efi-aarch64 device-tree-compiler ccache build-essential python3 git sudo \
+    && rm -rf /var/lib/apt/lists/* \
+    && touch /usr/share/qemu/efi-virtio.rom
 
 WORKDIR /workspace
 
