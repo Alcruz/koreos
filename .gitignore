@@ -23,6 +23,7 @@ a.out
 *.dSYM/
 *.stackdump
 core
+!core/
 core.*
 
 # Build folders
