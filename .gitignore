@@ -1,0 +1,61 @@
+# C/C++ generic ignores
+
+# Compiled object files
+*.o
+*.obj
+
+# Precompiled headers
+*.gch
+*.pch
+
+# Static and shared libraries
+*.a
+*.lib
+*.so
+*.dylib
+
+# Executables
+*.exe
+*.out
+a.out
+
+# Debug and symbol files
+*.dSYM/
+*.stackdump
+core
+core.*
+
+# Build folders
+build/
+bin/
+obj/
+out/
+
+# Dependency files
+*.d
+*.depend
+
+# Generated files
+compile_commands.json
+
+# Coverage
+lcov.info
+*.gcno
+*.gcda
+
+# ccache
+ccache/
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Tags and indexes
+.tags
+cscope.*
+
+# Logs
+*.log
