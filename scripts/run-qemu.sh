@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-KERNEL_BIN="./build/kernel.bin"
+KERNEL_BIN="./build/kernel.elf"
 QEMU_CMD="qemu-system-aarch64"
 
 if [ ! -f "$KERNEL_BIN" ]; then

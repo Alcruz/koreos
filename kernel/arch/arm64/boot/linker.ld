@@ -28,12 +28,14 @@ SECTIONS
         *(.data*)
     } > ram
 
+    . = ALIGN(8);
     _bss_start = .;
     .bss : {
         *(.bss)
         *(.bss*)
         *(COMMON)
     } > ram
+    . = ALIGN(8);
     _bss_end = .;
 
     . = . + 0x8000;
