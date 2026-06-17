@@ -1,0 +1,8 @@
+version: "3.8"
+services:
+  toolchain:
+    build: .
+    volumes:
+      - ..:/workspace:cached
+    tty: true
+    stdin_open: true
