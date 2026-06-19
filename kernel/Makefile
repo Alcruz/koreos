@@ -14,7 +14,7 @@ OUT := $(BUILD_DIR)/kernel.elf
 BIN := $(BUILD_DIR)/kernel.bin
 
 KERNEL_SRC := $(wildcard core/*.c drivers/serial/*.c)
-KERNEL_ASM := arch/$(ARCH)/boot/entry.S
+KERNEL_ASM := $(wildcard arch/$(ARCH)/boot/*.S)
 
 KERNEL_OBJ := $(KERNEL_SRC:%.c=$(BUILD_DIR)/%.o)
 KERNEL_OBJ += $(KERNEL_ASM:%.S=$(BUILD_DIR)/%.o)

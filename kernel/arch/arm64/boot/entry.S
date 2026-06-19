@@ -15,6 +15,11 @@ _start:
     b 1b
 2:
 
+    // Install the EL1 exception vector table (x0/DTB preserved; x9 is scratch)
+    ldr x9, =vectors
+    msr vbar_el1, x9
+    isb
+
     // Jump to main kernel code (x0 still holds the DTB pointer)
     bl kernel_main
 
