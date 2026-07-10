@@ -3,6 +3,7 @@
 #include "../include/memmap.h"
 #include "../include/fdt.h"
 #include "../include/pmm.h"
+#include "../include/mmu.h"
 #include "../include/panic.h"
 
 /* Provided by the linker script (arch/arm64/boot/linker.ld). */
@@ -61,6 +62,13 @@ void kernel_main(void *dtb)
     kprint_puts("Koreos!\n");
 
     memory_init(dtb, &pmm);
+
+    mmu_init_mair();
+    uint64_t mair;
+    __asm__ volatile("mrs %0, mair_el1" : "=r"(mair));
+    kprint_puts("mmu: MAIR_EL1 = ");
+    kprint_hex(mair);
+    kprint_puts("\n");
 
     size_t before = pmm_free_pages(&pmm);
     page_t *a = pmm_alloc_page(&pmm);
