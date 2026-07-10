@@ -2,7 +2,19 @@
 .global _start
 
 _start:
-    // x0 = device tree blob address (passed by bootloader/QEMU)
+    b       _start_main         // code0: branch past the 64-byte header
+    .long   0                   // code1 (reserved)
+    .quad   0                   // text_offset: load offset from RAM base
+    .quad   _kernel_size        // image_size: memory footprint to reserve
+    .quad   0                   // flags: LE, 2MB-aligned placement
+    .quad   0                   // res2
+    .quad   0                   // res3
+    .quad   0                   // res4
+    .long   0x644d5241          // magic: "ARM\x64"
+    .long   0                   // res5 (PE/COFF header offset, unused)
+
+_start_main:
+    // x0 = device tree blob address (passed by QEMU)
     ldr x30, =_stack_end
     mov sp, x30
 

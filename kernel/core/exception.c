@@ -1,4 +1,5 @@
-#include "../include/serial.h"
+#include "../include/kprint.h"
+#include "../include/panic.h"
 
 /* Names for the 16 vector table entries, indexed by the type passed from
  * vectors.S. */
@@ -21,14 +22,6 @@ static const char *const exception_names[16] = {
     "SError(Lower EL, AArch32)",
 };
 
-/* Print a 64-bit value as "0x" + 16 hex digits over the serial console. */
-static void serial_puthex(unsigned long val) {
-    static const char hex[] = "0123456789abcdef";
-    serial_puts("0x");
-    for (int shift = 60; shift >= 0; shift -= 4)
-        serial_putc(hex[(val >> shift) & 0xf]);
-}
-
 void handle_exception(unsigned long type, unsigned long *frame) {
     (void)frame; /* register file is saved; not decoded yet */
 
@@ -38,19 +31,17 @@ void handle_exception(unsigned long type, unsigned long *frame) {
     __asm__ volatile("mrs %0, far_el1" : "=r"(far));
     __asm__ volatile("mrs %0, spsr_el1" : "=r"(spsr));
 
-    serial_puts("\n*** EXCEPTION ***\n");
-    serial_puts("vector:   ");
-    serial_puts(exception_names[type & 0xf]);
-    serial_putc('\n');
+    kprint_puts("\n*** EXCEPTION ***\n");
+    kprint_puts("vector:   ");
+    kprint_puts(exception_names[type & 0xf]);
+    kprint_putc('\n');
 
-    serial_puts("ESR_EL1:  "); serial_puthex(esr);  serial_putc('\n');
-    serial_puts("  EC:     "); serial_puthex((esr >> 26) & 0x3f); serial_putc('\n');
-    serial_puts("  ISS:    "); serial_puthex(esr & 0x1ffffff);    serial_putc('\n');
-    serial_puts("ELR_EL1:  "); serial_puthex(elr);  serial_putc('\n');
-    serial_puts("FAR_EL1:  "); serial_puthex(far);  serial_putc('\n');
-    serial_puts("SPSR_EL1: "); serial_puthex(spsr); serial_putc('\n');
+    kprint_puts("ESR_EL1:  "); kprint_hex(esr);  kprint_putc('\n');
+    kprint_puts("  EC:     "); kprint_hex((esr >> 26) & 0x3f); kprint_putc('\n');
+    kprint_puts("  ISS:    "); kprint_hex(esr & 0x1ffffff);    kprint_putc('\n');
+    kprint_puts("ELR_EL1:  "); kprint_hex(elr);  kprint_putc('\n');
+    kprint_puts("FAR_EL1:  "); kprint_hex(far);  kprint_putc('\n');
+    kprint_puts("SPSR_EL1: "); kprint_hex(spsr); kprint_putc('\n');
 
-    serial_puts("System halted.\n");
-    for (;;)
-        __asm__ volatile("wfe");
+    halt();
 }

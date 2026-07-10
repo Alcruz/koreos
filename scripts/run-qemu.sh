@@ -1,7 +1,9 @@
 #!/bin/bash
 set -e
 
-KERNEL_BIN="./build/kernel.elf"
+# Boot the raw image, not the ELF: only kernel.bin (with its arm64 Image
+# header) loads at 0x40000000 and gets a DTB in x0. See CLAUDE.md.
+KERNEL_BIN="./build/kernel.bin"
 QEMU_CMD="qemu-system-aarch64"
 
 if [ ! -f "$KERNEL_BIN" ]; then

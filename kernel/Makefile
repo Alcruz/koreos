@@ -13,7 +13,7 @@ BUILD_DIR ?= ../build
 OUT := $(BUILD_DIR)/kernel.elf
 BIN := $(BUILD_DIR)/kernel.bin
 
-KERNEL_SRC := $(wildcard core/*.c drivers/serial/*.c)
+KERNEL_SRC := $(wildcard core/*.c drivers/serial/*.c mm/*.c lib/*.c)
 KERNEL_ASM := $(wildcard arch/$(ARCH)/boot/*.S)
 
 KERNEL_OBJ := $(KERNEL_SRC:%.c=$(BUILD_DIR)/%.o)
