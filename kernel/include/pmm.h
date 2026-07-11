@@ -1,7 +1,9 @@
 #ifndef _PMM_H
 #define _PMM_H
 
-#include "types.h"
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
 #include "memmap.h"
 
 #define PAGE_SHIFT 12

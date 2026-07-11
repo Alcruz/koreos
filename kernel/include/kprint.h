@@ -1,7 +1,7 @@
 #ifndef _KPRINT_H
 #define _KPRINT_H
 
-#include "types.h"
+#include <stdint.h>
 
 /* Tiny formatted output over the serial console (no libc). This is the single
  * front door for kernel console output: strings, characters, and numbers all
