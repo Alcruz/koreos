@@ -130,8 +130,8 @@ void kernel_main(void *dtb)
     kprint_puts(" (translation live)\n");
 
     size_t before = pmm_free_pages(&pmm);
-    page_t *a = pmm_alloc_page(&pmm);
-    page_t *b = pmm_alloc_page(&pmm);
+    pmm_page_t *a = pmm_alloc_page(&pmm);
+    pmm_page_t *b = pmm_alloc_page(&pmm);
     int ok = a && b && a != b && pmm_free_pages(&pmm) == before - 2;
     pmm_free_page(&pmm, a);
     pmm_free_page(&pmm, b);

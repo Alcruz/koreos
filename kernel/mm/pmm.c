@@ -100,7 +100,7 @@ bool pmm_init(memmap_t *map, pmm_t *out)
     return true;
 }
 
-page_t *pmm_alloc_page(pmm_t *pmm)
+pmm_page_t *pmm_alloc_page(pmm_t *pmm)
 {
     for (size_t step = 0; step < pmm->total_frames; step++) {
         size_t i = pmm->alloc_cursor + step;
@@ -110,13 +110,13 @@ page_t *pmm_alloc_page(pmm_t *pmm)
             bm_set(pmm, i);
             pmm->free_count--;
             pmm->alloc_cursor = i + 1;
-            return (page_t *)(uintptr_t)(pmm->base + ((uint64_t)i << PAGE_SHIFT));
+            return (pmm_page_t *)(uintptr_t)(pmm->base + ((uint64_t)i << PAGE_SHIFT));
         }
     }
     return NULL;
 }
 
-void pmm_free_page(pmm_t *pmm, page_t *page)
+void pmm_free_page(pmm_t *pmm, pmm_page_t *page)
 {
     uint64_t p = (uint64_t)(uintptr_t)page;
     if (p < pmm->base || p >= pmm->end || (p & (PAGE_SIZE - 1)))
