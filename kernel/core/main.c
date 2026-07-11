@@ -144,11 +144,23 @@ void kernel_main(void *dtb)
     kprint_puts(ok ? "pmm: alloc/free invariants OK\n"
                    : "pmm: alloc/free invariants FAILED\n");
 
-    /* Bring up the kernel heap over the frame allocator. It starts empty and
-     * grows on first use (later tasks); for now just confirm bring-up. */
+    /* Bring up the kernel heap over the frame allocator, then exercise growth:
+     * a 100-byte request pulls exactly one frame and links it as a single free
+     * block whose payload spans the frame minus the header. */
     heap_init(&pmm, &heap);
-    kprint_puts("heap: initialized, free list ");
-    kprint_puts(heap.free_list ? "non-empty\n" : "empty\n");
+    size_t heap_before = pmm_free_pages(&pmm);
+    block_header_t *grown = heap_grow(&heap, 100);
+    int heap_ok = grown && grown->free && grown->size >= 100
+               && heap.free_list == grown
+               && pmm_free_pages(&pmm) == heap_before - 1;
+    kprint_puts("heap: grow ");
+    if (heap_ok) {
+        kprint_puts("OK, block payload ");
+        kprint_dec(grown->size);
+        kprint_puts(" bytes\n");
+    } else {
+        kprint_puts("FAILED\n");
+    }
 
     /* Idle loop */
     while (1)

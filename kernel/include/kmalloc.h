@@ -52,4 +52,11 @@ typedef struct heap {
  * are reserved up front; the first allocation grows the heap (task 1.3.2). */
 void heap_init(pmm_t *frames, heap_t *out);
 
+/* Grow the heap by enough whole frames to hold a `need`-byte payload plus its
+ * header, wrap them in one free block, and link it (address-ordered) into the
+ * free list. Returns the new block, or NULL if the frame allocator can't hand
+ * back a contiguous run that large. kmalloc falls back to this when no existing
+ * block fits; also exposed for the boot self-test. */
+block_header_t *heap_grow(heap_t *heap, size_t need);
+
 #endif /* _KMALLOC_H */
