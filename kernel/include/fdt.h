@@ -1,7 +1,8 @@
 #ifndef _FDT_H
 #define _FDT_H
 
-#include "types.h"
+#include <stdint.h>
+#include <stdbool.h>
 #include "memmap.h"
 
 /* True if the blob at dtb begins with a valid FDT magic. */

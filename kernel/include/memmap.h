@@ -1,7 +1,9 @@
 #ifndef _MEMMAP_H
 #define _MEMMAP_H
 
-#include "types.h"
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
 
 /* Kind of a physical range. */
 typedef enum

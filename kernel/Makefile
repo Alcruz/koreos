@@ -5,7 +5,13 @@ AS := $(CROSS_COMPILE)as
 LD := $(CROSS_COMPILE)ld
 OBJCOPY := $(CROSS_COMPILE)objcopy
 
-CFLAGS := -Wall -O2 -ffreestanding -nostdinc -nostdlib -fno-builtin
+# GCC ships the freestanding headers (stdint.h, stddef.h, stdbool.h) in its own
+# builtin include dir. -nostdinc removes ALL default include paths, so add just
+# that one back with -isystem — this keeps target libc headers out while making
+# the C11 freestanding headers available.
+GCC_INCLUDE := $(shell $(CC) -print-file-name=include)
+
+CFLAGS := -Wall -O2 -ffreestanding -nostdinc -nostdlib -fno-builtin -isystem $(GCC_INCLUDE)
 ASFLAGS := -march=armv8-a
 LDFLAGS := -T arch/$(ARCH)/boot/linker.ld -nostdlib
 

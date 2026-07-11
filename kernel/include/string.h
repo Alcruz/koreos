@@ -1,7 +1,7 @@
 #ifndef _STRING_H
 #define _STRING_H
 
-#include "types.h"
+#include <stddef.h>
 
 /* Nonzero if a and b are equal NUL-terminated strings. */
 int str_eq(const char *a, const char *b);

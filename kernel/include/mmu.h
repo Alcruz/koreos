@@ -1,7 +1,8 @@
 #ifndef _MMU_H
 #define _MMU_H
 
-#include "types.h"
+#include <stdint.h>
+#include <stddef.h>
 #include "memmap.h"
 #include "pmm.h"
 
