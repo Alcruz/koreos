@@ -118,6 +118,17 @@ void kernel_main(void *dtb)
     mmu_check(root, (uint64_t)_kernel_start, "kernel");
     mmu_check(root, UART_BASE, "uart  ");
 
+    /* Switch translation on. If any of the identity map, the UART mapping, or
+     * TCR is wrong, the CPU faults here and the next line never prints. That it
+     * does print is the proof: code fetch, stack/globals, and MMIO all
+     * translate correctly. */
+    mmu_enable(root);
+    uint64_t sctlr;
+    __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
+    kprint_puts("mmu: enabled, SCTLR_EL1 = ");
+    kprint_hex(sctlr);
+    kprint_puts(" (translation live)\n");
+
     size_t before = pmm_free_pages(&pmm);
     page_t *a = pmm_alloc_page(&pmm);
     page_t *b = pmm_alloc_page(&pmm);

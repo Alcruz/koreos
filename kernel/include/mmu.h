@@ -82,9 +82,41 @@
     (PTE_ATTRINDX(MAIR_IDX_DEVICE) | PTE_AP_RW_EL1 | PTE_SH_NONE | PTE_AF | \
      PTE_PXN | PTE_UXN)
 
+/* ---- TCR_EL1: translation control -----------------------------------------
+ *
+ * We use the TTBR0_EL1 (low-half) regime for the identity map and disable
+ * TTBR1_EL1 walks entirely. 48-bit VA => TxSZ = 64 - 48 = 16. Table walks are
+ * themselves Normal, Inner+Outer Write-Back Write-Allocate, Inner Shareable, so
+ * the walker's own accesses are cacheable and coherent. */
+#define MMU_T0SZ          16UL          /* 64 - 48-bit VA */
+
+#define TCR_T0SZ(x)       ((uint64_t)(x) << 0)
+#define TCR_IRGN0_WBWA    (1UL << 8)    /* TTBR0 walk inner cacheability: WBWA */
+#define TCR_ORGN0_WBWA    (1UL << 10)   /* TTBR0 walk outer cacheability: WBWA */
+#define TCR_SH0_INNER     (3UL << 12)   /* TTBR0 walk shareability: inner      */
+#define TCR_TG0_4K        (0UL << 14)   /* TTBR0 granule: 4 KiB                */
+#define TCR_T1SZ(x)       ((uint64_t)(x) << 16)
+#define TCR_EPD1          (1UL << 23)   /* disable TTBR1 table walks           */
+#define TCR_TG1_4K        (2UL << 30)   /* TTBR1 granule: 4 KiB (TG1 encoding  */
+                                        /*   differs from TG0!)                */
+#define TCR_IPS_SHIFT     32            /* intermediate PA size, bits[34:32]   */
+
+/* ---- SCTLR_EL1: system control (the bits we flip) ------------------------- */
+#define SCTLR_M           (1UL << 0)    /* MMU enable                          */
+#define SCTLR_C           (1UL << 2)    /* data & unified cache enable         */
+#define SCTLR_I           (1UL << 12)   /* instruction cache enable            */
+
 /* Program MAIR_EL1 with the attribute table defined above. Must run before any
  * translation regime that references these attribute indices is enabled. */
 void mmu_init_mair(void);
+
+/* Turn on the MMU using `root` (an identity-mapped L0 table from
+ * mmu_build_page_tables) as the TTBR0_EL1 base: configure TCR_EL1, load
+ * TTBR0_EL1, flush stale TLB/instruction-cache state, then set SCTLR_EL1.M
+ * (and the cache-enable bits). Returns with translation live. `root` must map
+ * the currently-executing code, the stack, and any MMIO touched afterwards, or
+ * the CPU faults the moment translation switches on. */
+void mmu_enable(const uint64_t *root);
 
 /* Build the kernel's initial identity translation tables from `map`: every RAM
  * region (usable and reserved alike) is mapped as Normal cacheable memory, and

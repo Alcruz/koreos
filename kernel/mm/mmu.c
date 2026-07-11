@@ -10,6 +10,47 @@ void mmu_init_mair(void)
     __asm__ volatile("isb");
 }
 
+void mmu_enable(const uint64_t *root)
+{
+    /* Match TCR_EL1.IPS to what the CPU actually supports: ID_AA64MMFR0_EL1
+     * PARange (bits[3:0]) uses the same encoding as IPS. Clamp to 48-bit, the
+     * largest our 4-level tables address. */
+    uint64_t mmfr0;
+    __asm__ volatile("mrs %0, id_aa64mmfr0_el1" : "=r"(mmfr0));
+    uint64_t ips = mmfr0 & 0xF;
+    if (ips > 5)
+        ips = 5;
+
+    uint64_t tcr =
+        TCR_T0SZ(MMU_T0SZ) | TCR_IRGN0_WBWA | TCR_ORGN0_WBWA |
+        TCR_SH0_INNER | TCR_TG0_4K |
+        TCR_T1SZ(MMU_T0SZ) | TCR_EPD1 | TCR_TG1_4K |
+        (ips << TCR_IPS_SHIFT);
+
+    /* Publish the page-table writes before the walker can observe them, then
+     * install the translation regime. MAIR_EL1 is already programmed by
+     * mmu_init_mair(). */
+    __asm__ volatile("dsb ish");
+    __asm__ volatile("msr tcr_el1, %0"   :: "r"(tcr));
+    __asm__ volatile("msr ttbr0_el1, %0" :: "r"((uint64_t)(uintptr_t)root));
+    __asm__ volatile("isb");
+
+    /* Drop any stale translations/instructions the CPU may have cached before
+     * translation existed. */
+    __asm__ volatile("tlbi vmalle1");
+    __asm__ volatile("ic iallu");
+    __asm__ volatile("dsb ish");
+    __asm__ volatile("isb");
+
+    /* Flip the enable bits. The trailing ISB is mandatory: the very next
+     * instruction fetch must go through the freshly enabled MMU. */
+    uint64_t sctlr;
+    __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
+    sctlr |= SCTLR_M | SCTLR_C | SCTLR_I;
+    __asm__ volatile("msr sctlr_el1, %0" :: "r"(sctlr));
+    __asm__ volatile("isb");
+}
+
 /* Table index for `va` at translation level 0..3. Each level consumes 9 VA
  * bits; L3 starts at bit 12 (the 4 KiB page offset), so level L starts at
  * bit 12 + (3 - L) * 9. */
