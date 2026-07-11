@@ -79,12 +79,12 @@ static uint64_t *alloc_table(pmm_t *pmm)
 static uint64_t *next_table(uint64_t *pte, pmm_t *pmm)
 {
     if (*pte & PTE_VALID)
-        return (uint64_t *)(*pte & PTE_ADDR_MASK);
+        return (uint64_t *)(uintptr_t)(*pte & PTE_ADDR_MASK);
 
     uint64_t *tbl = alloc_table(pmm);
     if (!tbl)
         return NULL;
-    *pte = ((uint64_t)tbl & PTE_ADDR_MASK) | PTE_TABLE;
+    *pte = ((uint64_t)(uintptr_t)tbl & PTE_ADDR_MASK) | PTE_TABLE;
     return tbl;
 }
 
@@ -167,7 +167,7 @@ uint64_t mmu_lookup(const uint64_t *root, uint64_t va)
         if (!table_bit)
             return desc;                   /* 0b01 block: a leaf at L1/L2  */
 
-        tbl = (const uint64_t *)(desc & PTE_ADDR_MASK);
+        tbl = (const uint64_t *)(uintptr_t)(desc & PTE_ADDR_MASK);
     }
 
     return 0;
