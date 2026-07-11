@@ -2,14 +2,16 @@
 #define _MMU_H
 
 #include "types.h"
+#include "memmap.h"
+#include "pmm.h"
 
 /* AArch64 memory management unit setup.
  *
- * The MMU is brought up in stages; this header currently covers the memory
- * attribute table (MAIR_EL1). Translation table setup (TCR_EL1, TTBRn_EL1,
- * page tables) builds on the attribute indices defined here. */
+ * The MMU is brought up in stages: the memory attribute table (MAIR_EL1), then
+ * the translation tables built here, then TCR_EL1/TTBRn_EL1 and finally the
+ * SCTLR_EL1.M enable bit. This header covers the first two. */
 
-/* Memory attribute indices into MAIR_EL1.
+/* ---- MAIR_EL1: memory attribute table -------------------------------------
  *
  * AArch64 indirects the memory *type* through MAIR_EL1: the register holds
  * eight 8-bit attribute fields (Attr0..Attr7). A translation-table block/page
@@ -37,8 +39,65 @@
     ((MAIR_ATTR_NORMAL << (MAIR_IDX_NORMAL * 8)) | \
      (MAIR_ATTR_DEVICE << (MAIR_IDX_DEVICE * 8)))
 
+/* ---- Translation table descriptor format ----------------------------------
+ *
+ * 4 KiB granule, 48-bit VA: four levels (L0..L3), each table one 4 KiB page of
+ * 512 eight-byte descriptors. An L0 entry spans 512 GiB, L1 1 GiB, L2 2 MiB,
+ * L3 4 KiB. We map with 2 MiB blocks at L2 where alignment allows and fall back
+ * to 4 KiB pages at L3 otherwise. */
+#define PT_ENTRIES        512
+#define BLOCK_2M_SIZE     (2UL * 1024 * 1024)
+
+/* Descriptor type, bits[1:0]. Bit 0 is the valid bit; bit 1 selects table vs
+ * block at L0-L2, and must be set for a valid page at L3. */
+#define PTE_VALID         (1UL << 0)
+#define PTE_TABLE         (3UL)   /* 0b11: valid, points to next-level table  */
+#define PTE_BLOCK         (1UL)   /* 0b01: valid L1/L2 block (leaf)           */
+#define PTE_PAGE          (3UL)   /* 0b11: valid L3 page (leaf)               */
+
+/* Output-address field of block/page/table descriptors: bits[47:12]. */
+#define PTE_ADDR_MASK     0x0000FFFFFFFFF000UL
+
+/* Lower attributes of block/page descriptors, bits[11:2]. */
+#define PTE_ATTRINDX(i)   ((uint64_t)(i) << 2)   /* MAIR index, bits[4:2]     */
+#define PTE_AP_RW_EL1     (0UL << 6)   /* EL1 read/write, no EL0 access       */
+#define PTE_SH_NONE       (0UL << 8)   /* non-shareable (fine for Device)     */
+#define PTE_SH_INNER      (3UL << 8)   /* inner shareable (Normal cacheable)  */
+#define PTE_AF            (1UL << 10)  /* access flag; access faults if clear */
+
+/* Upper attributes, bits[54:53]: execute-never at EL1 (PXN) and EL0 (UXN). */
+#define PTE_PXN           (1UL << 53)
+#define PTE_UXN           (1UL << 54)
+
+/* Attribute presets for the two mappings we build.
+ *
+ * PTE_NORMAL: cacheable RAM, inner-shareable, kernel RW, executable (the kernel
+ *   runs from RAM, so no execute-never here).
+ * PTE_DEVICE: MMIO, kernel RW, execute-never at both ELs so nothing is ever
+ *   speculatively fetched from a peripheral. Shareability is ignored for
+ *   Device memory, so it is left non-shareable. */
+#define PTE_NORMAL \
+    (PTE_ATTRINDX(MAIR_IDX_NORMAL) | PTE_AP_RW_EL1 | PTE_SH_INNER | PTE_AF)
+#define PTE_DEVICE \
+    (PTE_ATTRINDX(MAIR_IDX_DEVICE) | PTE_AP_RW_EL1 | PTE_SH_NONE | PTE_AF | \
+     PTE_PXN | PTE_UXN)
+
 /* Program MAIR_EL1 with the attribute table defined above. Must run before any
  * translation regime that references these attribute indices is enabled. */
 void mmu_init_mair(void);
+
+/* Build the kernel's initial identity translation tables from `map`: every RAM
+ * region (usable and reserved alike) is mapped as Normal cacheable memory, and
+ * the platform's PL011 UART MMIO page is mapped as Device-nGnRnE. Tables are
+ * allocated one 4 KiB frame at a time from `pmm`. Returns the L0 table — which
+ * is itself identity-mapped, so its VA equals the PA to load into TTBR0_EL1
+ * later — or NULL if the pmm ran out of frames. Does NOT enable translation;
+ * that is a separate step. */
+uint64_t *mmu_build_page_tables(const memmap_t *map, pmm_t *pmm);
+
+/* Walk `root` for virtual address `va` and return the leaf block/page
+ * descriptor, or 0 if `va` is unmapped. For verifying the tables before the
+ * MMU is switched on. */
+uint64_t mmu_lookup(const uint64_t *root, uint64_t va);
 
 #endif /* _MMU_H */
