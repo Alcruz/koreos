@@ -92,76 +92,26 @@ static void mmu_check(const uint64_t *root, uint64_t va, const char *what)
                                        : "  ??\n");
 }
 
-/* Exercise the heap hard enough to surface corruption or leaks before Phase 2
- * builds on it: varied sizes with per-block sentinels, interleaved frees and
- * reuse, a zeroing check, a graceful-exhaustion case, and a full-reclaim
- * invariant. Returns nonzero on pass. */
-static int heap_selftest(heap_t *h)
+/* Smoke check that the heap is alive after bring-up: one alloc round-trips and
+ * kzalloc actually zeroes. Exhaustive corruption/leak/stress coverage lives in
+ * the host suite (tests/test_kmalloc.c); this only proves the on-target heap
+ * came up. Returns nonzero on pass. */
+static int heap_smoke(heap_t *h)
 {
-    enum { N = 8 };
-    static const size_t sizes[N] = { 16, 24, 64, 100, 500, 1000, 4096, 9000 };
-    void *p[N];
+    void *p = kmalloc(h, 64);
+    if (!p || ((uintptr_t)p % HEAP_ALIGN) != 0)
+        return 0;
+    kfree(h, p);
 
-    /* Varied sizes, each stamped with a unique byte; every stamp must survive,
-     * which fails if any two blocks overlap or a split miscomputed a bound. */
-    for (int i = 0; i < N; i++) {
-        p[i] = kmalloc(h, sizes[i]);
-        if (!p[i] || ((uintptr_t)p[i] % HEAP_ALIGN) != 0)
-            return 0;
-        for (size_t j = 0; j < sizes[i]; j++)
-            ((uint8_t *)p[i])[j] = (uint8_t)(i + 1);
-    }
-    for (int i = 0; i < N; i++)
-        for (size_t j = 0; j < sizes[i]; j++)
-            if (((uint8_t *)p[i])[j] != (uint8_t)(i + 1))
-                return 0;
-
-    /* Free the even-indexed blocks and reallocate them; the odd blocks left in
-     * place must be untouched by the churn. */
-    for (int i = 0; i < N; i += 2)
-        kfree(h, p[i]);
-    for (int i = 0; i < N; i += 2) {
-        p[i] = kmalloc(h, sizes[i]);
-        if (!p[i])
-            return 0;
-        for (size_t j = 0; j < sizes[i]; j++)
-            ((uint8_t *)p[i])[j] = (uint8_t)(i + 1);
-    }
-    for (int i = 1; i < N; i += 2)
-        for (size_t j = 0; j < sizes[i]; j++)
-            if (((uint8_t *)p[i])[j] != (uint8_t)(i + 1))
-                return 0;
-
-    /* kzalloc hands back zeroed memory. */
-    uint8_t *z = kzalloc(h, 200);
+    uint8_t *z = kzalloc(h, 64);
     if (!z)
         return 0;
-    for (size_t j = 0; j < 200; j++)
+    for (size_t j = 0; j < 64; j++)
         if (z[j] != 0)
             return 0;
     kfree(h, z);
 
-    /* Exhaustion: a request larger than all of RAM fails gracefully (NULL, no
-     * crash) and leaves the heap usable for the next allocation. */
-    if (kmalloc(h, (size_t)1 << 40) != NULL)
-        return 0;
-    void *after = kmalloc(h, 32);
-    if (!after)
-        return 0;
-    kfree(h, after);
-
-    /* Free everything, then run an identical alloc/free cycle: a deterministic,
-     * leak-free allocator must return the free pool to the exact same size. */
-    for (int i = 0; i < N; i++)
-        kfree(h, p[i]);
-    size_t reclaimed = heap_free_bytes(h);
-
-    for (int i = 0; i < N; i++)
-        p[i] = kmalloc(h, sizes[i]);
-    for (int i = 0; i < N; i++)
-        kfree(h, p[i]);
-
-    return heap_free_bytes(h) == reclaimed;
+    return 1;
 }
 
 /* x0 on entry (the DTB pointer) is passed straight through from _start. */
@@ -216,12 +166,12 @@ void kernel_main(void *dtb)
     kprint_puts(ok ? "pmm: alloc/free invariants OK\n"
                    : "pmm: alloc/free invariants FAILED\n");
 
-    /* Bring up the kernel heap over the frame allocator and stress it before
-     * anything relies on it. */
+    /* Bring up the kernel heap over the frame allocator and smoke-check it
+     * before anything relies on it. */
     heap_init(&pmm, &heap);
-    kprint_puts(heap_selftest(&heap)
-                    ? "heap: stress test OK (sizes/interleave/zero/exhaust/reclaim)\n"
-                    : "heap: stress test FAILED\n");
+    kprint_puts(heap_smoke(&heap)
+                    ? "heap: smoke check OK (alloc/free/zero)\n"
+                    : "heap: smoke check FAILED\n");
 
     /* Idle loop */
     while (1)

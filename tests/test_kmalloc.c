@@ -31,6 +31,25 @@ static void fill(void *p, uint8_t v, size_t n)
         b[i] = v;
 }
 
+/* True iff all `n` bytes of `p` equal `v`. A failed stamp check means two live
+ * blocks overlapped or a split/coalesce corrupted a neighbour. */
+static int stamped(const void *p, uint8_t v, size_t n)
+{
+    const uint8_t *b = p;
+    for (size_t i = 0; i < n; i++)
+        if (b[i] != v)
+            return 0;
+    return 1;
+}
+
+/* Deterministic LCG so the stress churn is reproducible across runs (no
+ * dependence on the C library's rand()). Numerical Recipes constants. */
+static uint32_t lcg(uint32_t *s)
+{
+    *s = *s * 1664525u + 1013904223u;
+    return *s;
+}
+
 #define RAM_BYTES   (16 * 1024 * 1024)          /* 16 MiB of pretend RAM     */
 
 /* Payload of the single free block a fresh one-page grow yields. */
@@ -237,6 +256,143 @@ static void test_exhaustion_then_recovery(void)
     TEST_ASSERT_NOT_NULL(again);
 }
 
+/* --- leaks, corruption & stress ---------------------------------------- */
+
+/* An oversized request — larger than all of RAM — must fail gracefully (NULL,
+ * no crash) and leave the heap fully usable for the next allocation. This is a
+ * different path from draining page-by-page: the size itself is rejected. */
+static void test_oversized_request_fails_gracefully(void)
+{
+    TEST_ASSERT_NULL(kmalloc(&heap, (size_t)1 << 40));
+
+    void *after = kmalloc(&heap, 32);
+    TEST_ASSERT_NOT_NULL(after);
+    kfree(&heap, after);
+}
+
+/* Leak check: once the heap has grown, an alloc-everything / free-everything
+ * cycle must return the free pool to the exact same size every time. A drifting
+ * total means a block or a split header went missing on the round trip. */
+static void test_repeated_full_cycle_is_leak_free(void)
+{
+    enum { N = 8 };
+    static const size_t sizes[N] = { 16, 24, 64, 100, 500, 1000, 4096, 9000 };
+    void *p[N];
+
+    /* Warm the heap up to its working size, then record the baseline. */
+    for (int i = 0; i < N; i++)
+        p[i] = kmalloc(&heap, sizes[i]);
+    for (int i = 0; i < N; i++) {
+        TEST_ASSERT_NOT_NULL(p[i]);
+        kfree(&heap, p[i]);
+    }
+    size_t baseline = heap_free_bytes(&heap);
+
+    /* Every subsequent identical cycle must reclaim back to that baseline. */
+    for (int cycle = 0; cycle < 5; cycle++) {
+        for (int i = 0; i < N; i++)
+            p[i] = kmalloc(&heap, sizes[i]);
+        for (int i = 0; i < N; i++)
+            kfree(&heap, p[i]);
+        TEST_ASSERT_EQUAL_UINT64(baseline, heap_free_bytes(&heap));
+    }
+}
+
+/* Corruption check: freeing and reallocating a subset of live blocks must not
+ * disturb the blocks left in place. Each block carries a unique byte stamp; if
+ * a realloc handed back memory overlapping a survivor, the survivor's stamp
+ * would be clobbered. */
+static void test_interleaved_free_preserves_survivors(void)
+{
+    enum { N = 8 };
+    static const size_t sizes[N] = { 16, 24, 64, 100, 500, 1000, 4096, 9000 };
+    void *p[N];
+
+    for (int i = 0; i < N; i++) {
+        p[i] = kmalloc(&heap, sizes[i]);
+        TEST_ASSERT_NOT_NULL(p[i]);
+        TEST_ASSERT_EQUAL_UINT64(0, (uintptr_t)p[i] % HEAP_ALIGN);
+        fill(p[i], (uint8_t)(i + 1), sizes[i]);
+    }
+
+    /* Free the even-indexed blocks, then reallocate the same sizes. The churn
+     * reuses the just-freed holes. */
+    for (int i = 0; i < N; i += 2)
+        kfree(&heap, p[i]);
+    for (int i = 0; i < N; i += 2) {
+        p[i] = kmalloc(&heap, sizes[i]);
+        TEST_ASSERT_NOT_NULL(p[i]);
+        fill(p[i], (uint8_t)(i + 1), sizes[i]);
+    }
+
+    /* The odd-indexed blocks were never freed; their stamps must be intact. */
+    for (int i = 1; i < N; i += 2)
+        TEST_ASSERT_TRUE(stamped(p[i], (uint8_t)(i + 1), sizes[i]));
+
+    for (int i = 0; i < N; i++)
+        kfree(&heap, p[i]);
+}
+
+/* One deterministic churn run: `rounds` of pseudo-random alloc/free across a
+ * pool of slots, every live block stamped and re-verified on each touch so any
+ * overlap or header corruption surfaces as a bad stamp (and ASan/UBSan watch
+ * every access). Drains the pool at the end and returns the resulting free
+ * total. The heap only ever grows (frames are never returned to the PMM), so
+ * two runs from the same seed must drain to the same total — a leak would force
+ * the second run to grow further. */
+static size_t stress_churn(uint32_t seed, int rounds)
+{
+    enum { SLOTS = 64 };
+    struct { void *ptr; size_t size; uint8_t stamp; } slot[SLOTS] = {0};
+    uint32_t rng = seed;
+    uint8_t next_stamp = 1;
+
+    for (int r = 0; r < rounds; r++) {
+        int i = lcg(&rng) % SLOTS;
+        if (slot[i].ptr) {
+            /* Occupied: the stamp must still be intact, then free it. */
+            TEST_ASSERT_TRUE(stamped(slot[i].ptr, slot[i].stamp, slot[i].size));
+            kfree(&heap, slot[i].ptr);
+            slot[i].ptr = NULL;
+        } else {
+            /* Empty: allocate a varied size, stamp every byte, verify readback. */
+            size_t size = 1 + (lcg(&rng) % 2000);
+            void *p = kmalloc(&heap, size);
+            if (!p)
+                continue;                       /* transient exhaustion is fine */
+            TEST_ASSERT_EQUAL_UINT64(0, (uintptr_t)p % HEAP_ALIGN);
+            TEST_ASSERT_TRUE(in_ram(p, size));
+            uint8_t s = next_stamp++;
+            if (next_stamp == 0)
+                next_stamp = 1;                 /* keep stamps nonzero */
+            fill(p, s, size);
+            slot[i].ptr = p;
+            slot[i].size = size;
+            slot[i].stamp = s;
+        }
+    }
+
+    /* Drain the pool; surviving stamps must still be intact on the way out. */
+    for (int i = 0; i < SLOTS; i++) {
+        if (slot[i].ptr) {
+            TEST_ASSERT_TRUE(stamped(slot[i].ptr, slot[i].stamp, slot[i].size));
+            kfree(&heap, slot[i].ptr);
+        }
+    }
+
+    return heap_free_bytes(&heap);
+}
+
+static void test_stress_churn_keeps_integrity(void)
+{
+    /* Two identical deterministic runs. Each verifies stamps throughout; the
+     * matching drained totals prove the churn neither corrupted nor leaked
+     * (a lost block would make the second run grow the heap further). */
+    size_t first = stress_churn(0xC0FFEEu, 20000);
+    size_t second = stress_churn(0xC0FFEEu, 20000);
+    TEST_ASSERT_EQUAL_UINT64(first, second);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -251,5 +407,9 @@ int main(void)
     RUN_TEST(test_freeing_all_neighbours_coalesces_back_to_one_page);
     RUN_TEST(test_free_then_reuse_serves_from_freed_space);
     RUN_TEST(test_exhaustion_then_recovery);
+    RUN_TEST(test_oversized_request_fails_gracefully);
+    RUN_TEST(test_repeated_full_cycle_is_leak_free);
+    RUN_TEST(test_interleaved_free_preserves_survivors);
+    RUN_TEST(test_stress_churn_keeps_integrity);
     return UNITY_END();
 }
