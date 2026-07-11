@@ -21,8 +21,15 @@ BUILD := build/$(shell uname -s)-$(shell uname -m)
 UNITY_SRC := unity/unity.c
 
 # Kernel modules linked into every suite. Extra modules a suite doesn't use are
-# harmless; add here as new suites need them.
-KERNEL_SRC := ../kernel/mm/pmm.c ../kernel/mm/memmap.c
+# harmless; add here as new suites need them. Modules with unresolved externals
+# (e.g. kprint.c needs a serial backend) can't live here — see EXTRA_* below.
+KERNEL_SRC := ../kernel/mm/pmm.c ../kernel/mm/memmap.c ../kernel/mm/kmalloc.c \
+              ../kernel/lib/string.c ../kernel/lib/fdt.c
+
+# Per-suite extra sources, appended only to that one suite's link. kprint.c calls
+# the serial backend, which test_kprint.c stubs out, so it must not be linked
+# into suites that don't provide that stub.
+EXTRA_kprint := ../kernel/lib/kprint.c
 
 # test_pmm.c -> build/pmm, etc.
 SUITES := $(patsubst test_%.c,$(BUILD)/%,$(wildcard test_*.c))
@@ -32,9 +39,9 @@ all: test
 test: $(SUITES)
 	@fail=0; for r in $(SUITES); do echo "=== $$r ==="; ./$$r || fail=1; done; exit $$fail
 
-$(BUILD)/%: test_%.c $(UNITY_SRC) $(KERNEL_SRC) unity/unity.h ../kernel/include/*.h
+$(BUILD)/%: test_%.c $(UNITY_SRC) $(KERNEL_SRC) $(EXTRA_kprint) unity/unity.h ../kernel/include/*.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -o $@ test_$*.c $(UNITY_SRC) $(KERNEL_SRC)
+	$(CC) $(CFLAGS) -o $@ test_$*.c $(UNITY_SRC) $(KERNEL_SRC) $(EXTRA_$*)
 
 clean:
 	rm -rf build
