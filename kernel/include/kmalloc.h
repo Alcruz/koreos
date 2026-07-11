@@ -47,4 +47,13 @@ void *kmalloc(heap_t *heap, size_t size);
  * plain double free is caught and ignored. */
 void kfree(heap_t *heap, void *ptr);
 
+/* Like kmalloc, but the returned `size` bytes are zeroed. Returns NULL on the
+ * same conditions as kmalloc. Frames from the PMM come back non-zeroed, so
+ * callers wanting clean memory (task structs, page tables) use this. */
+void *kzalloc(heap_t *heap, size_t size);
+
+/* Total free payload currently on the heap's free list, in bytes (excludes
+ * block headers). For diagnostics and leak checks, not the allocation path. */
+size_t heap_free_bytes(const heap_t *heap);
+
 #endif /* _KMALLOC_H */

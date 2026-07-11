@@ -92,6 +92,78 @@ static void mmu_check(const uint64_t *root, uint64_t va, const char *what)
                                        : "  ??\n");
 }
 
+/* Exercise the heap hard enough to surface corruption or leaks before Phase 2
+ * builds on it: varied sizes with per-block sentinels, interleaved frees and
+ * reuse, a zeroing check, a graceful-exhaustion case, and a full-reclaim
+ * invariant. Returns nonzero on pass. */
+static int heap_selftest(heap_t *h)
+{
+    enum { N = 8 };
+    static const size_t sizes[N] = { 16, 24, 64, 100, 500, 1000, 4096, 9000 };
+    void *p[N];
+
+    /* Varied sizes, each stamped with a unique byte; every stamp must survive,
+     * which fails if any two blocks overlap or a split miscomputed a bound. */
+    for (int i = 0; i < N; i++) {
+        p[i] = kmalloc(h, sizes[i]);
+        if (!p[i] || ((uintptr_t)p[i] % HEAP_ALIGN) != 0)
+            return 0;
+        for (size_t j = 0; j < sizes[i]; j++)
+            ((uint8_t *)p[i])[j] = (uint8_t)(i + 1);
+    }
+    for (int i = 0; i < N; i++)
+        for (size_t j = 0; j < sizes[i]; j++)
+            if (((uint8_t *)p[i])[j] != (uint8_t)(i + 1))
+                return 0;
+
+    /* Free the even-indexed blocks and reallocate them; the odd blocks left in
+     * place must be untouched by the churn. */
+    for (int i = 0; i < N; i += 2)
+        kfree(h, p[i]);
+    for (int i = 0; i < N; i += 2) {
+        p[i] = kmalloc(h, sizes[i]);
+        if (!p[i])
+            return 0;
+        for (size_t j = 0; j < sizes[i]; j++)
+            ((uint8_t *)p[i])[j] = (uint8_t)(i + 1);
+    }
+    for (int i = 1; i < N; i += 2)
+        for (size_t j = 0; j < sizes[i]; j++)
+            if (((uint8_t *)p[i])[j] != (uint8_t)(i + 1))
+                return 0;
+
+    /* kzalloc hands back zeroed memory. */
+    uint8_t *z = kzalloc(h, 200);
+    if (!z)
+        return 0;
+    for (size_t j = 0; j < 200; j++)
+        if (z[j] != 0)
+            return 0;
+    kfree(h, z);
+
+    /* Exhaustion: a request larger than all of RAM fails gracefully (NULL, no
+     * crash) and leaves the heap usable for the next allocation. */
+    if (kmalloc(h, (size_t)1 << 40) != NULL)
+        return 0;
+    void *after = kmalloc(h, 32);
+    if (!after)
+        return 0;
+    kfree(h, after);
+
+    /* Free everything, then run an identical alloc/free cycle: a deterministic,
+     * leak-free allocator must return the free pool to the exact same size. */
+    for (int i = 0; i < N; i++)
+        kfree(h, p[i]);
+    size_t reclaimed = heap_free_bytes(h);
+
+    for (int i = 0; i < N; i++)
+        p[i] = kmalloc(h, sizes[i]);
+    for (int i = 0; i < N; i++)
+        kfree(h, p[i]);
+
+    return heap_free_bytes(h) == reclaimed;
+}
+
 /* x0 on entry (the DTB pointer) is passed straight through from _start. */
 void kernel_main(void *dtb)
 {
@@ -144,28 +216,12 @@ void kernel_main(void *dtb)
     kprint_puts(ok ? "pmm: alloc/free invariants OK\n"
                    : "pmm: alloc/free invariants FAILED\n");
 
-    /* Bring up the kernel heap over the frame allocator and exercise it.
-     * First carve three adjacent blocks out of a single grown frame (first-fit
-     * + split); they must all fit in that one frame. */
+    /* Bring up the kernel heap over the frame allocator and stress it before
+     * anything relies on it. */
     heap_init(&pmm, &heap);
-    size_t heap_before = pmm_free_pages(&pmm);
-    void *p0 = kmalloc(&heap, 1024);
-    void *p1 = kmalloc(&heap, 1024);
-    void *p2 = kmalloc(&heap, 1024);
-    int heap_ok = p0 && p1 && p2 && pmm_free_pages(&pmm) == heap_before - 1;
-
-    /* Now free all three: coalescing must merge the pieces (and the frame's
-     * leftover tail) back into one frame-sized block. Proof is a near-full-frame
-     * request afterwards reusing that exact block -- same address as p0, and no
-     * new frame pulled. Without coalescing no single freed block would fit. */
-    kfree(&heap, p0);
-    kfree(&heap, p1);
-    kfree(&heap, p2);
-    void *whole = kmalloc(&heap, 4000);
-    heap_ok = heap_ok && whole == p0
-           && pmm_free_pages(&pmm) == heap_before - 1;
-    kprint_puts(heap_ok ? "heap: kmalloc/kfree OK (split + coalesce)\n"
-                        : "heap: kmalloc/kfree FAILED\n");
+    kprint_puts(heap_selftest(&heap)
+                    ? "heap: stress test OK (sizes/interleave/zero/exhaust/reclaim)\n"
+                    : "heap: stress test FAILED\n");
 
     /* Idle loop */
     while (1)

@@ -178,3 +178,22 @@ void kfree(heap_t *heap, void *ptr)
 
     freelist_insert(heap, block);
 }
+
+void *kzalloc(heap_t *heap, size_t size)
+{
+    void *ptr = kmalloc(heap, size);
+    if (ptr) {
+        uint8_t *b = ptr;
+        for (size_t i = 0; i < size; i++)
+            b[i] = 0;
+    }
+    return ptr;
+}
+
+size_t heap_free_bytes(const heap_t *heap)
+{
+    size_t total = 0;
+    for (const block_header_t *b = heap->free_list; b; b = b->next)
+        total += b->size;
+    return total;
+}
