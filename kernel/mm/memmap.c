@@ -5,6 +5,7 @@
  */
 
 #include "../include/memmap.h"
+#include "../include/align.h"
 
 static inline uint64_t max_u64(uint64_t a, uint64_t b) { return a > b ? a : b; }
 static inline uint64_t min_u64(uint64_t a, uint64_t b) { return a < b ? a : b; }
@@ -71,7 +72,7 @@ uint64_t memmap_find_free(const memmap_t *m, uint64_t size, uint64_t align)
             continue;
         uint64_t base = m->range[i].base;
         uint64_t end = base + m->range[i].size;
-        uint64_t cur = (base + align - 1) & ~(align - 1);
+        uint64_t cur = align_up(base, align);
         if (cur + size <= end)
             return cur;
     }

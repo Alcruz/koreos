@@ -3,6 +3,7 @@
 #include "../include/memmap.h"
 #include "../include/fdt.h"
 #include "../include/pmm.h"
+#include "../include/kmalloc.h"
 #include "../include/mmu.h"
 #include "../include/panic.h"
 #include "../drivers/serial/pl011.h"   /* UART_BASE, for the mapping check */
@@ -15,6 +16,10 @@ extern char _kernel_end[];
  * it outlives kernel_main's stack frame and can be shared with other
  * subsystems. */
 static pmm_t pmm;
+
+/* The kernel heap. Grows out of `pmm` on demand; lives in the data segment for
+ * the same reason as `pmm`. */
+static heap_t heap;
 
 /* Turn whatever the firmware told us into a physical RAM layout: size RAM from
  * the DTB's /memory nodes, then carve out the regions that are already spoken
@@ -138,6 +143,12 @@ void kernel_main(void *dtb)
     ok = ok && pmm_free_pages(&pmm) == before;
     kprint_puts(ok ? "pmm: alloc/free invariants OK\n"
                    : "pmm: alloc/free invariants FAILED\n");
+
+    /* Bring up the kernel heap over the frame allocator. It starts empty and
+     * grows on first use (later tasks); for now just confirm bring-up. */
+    heap_init(&pmm, &heap);
+    kprint_puts("heap: initialized, free list ");
+    kprint_puts(heap.free_list ? "non-empty\n" : "empty\n");
 
     /* Idle loop */
     while (1)
