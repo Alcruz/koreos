@@ -6,9 +6,9 @@
  * the heap grows a frame at a time on demand rather than reserving a fixed
  * arena up front.
  *
- * This file lays out the foundation (task 1.3.1): block header + free-list
- * state, 16-byte alignment, and heap bring-up. heap_grow, kmalloc, kfree, and
- * kzalloc land in later tasks.
+ * Blocks are split on allocation and coalesced with adjacent free neighbours on
+ * free, so the list holds at most one free block per contiguous free region.
+ * kzalloc still lands in a later task.
  */
 
 #include "../include/kmalloc.h"
@@ -41,16 +41,51 @@ void heap_init(pmm_t *frames, heap_t *out)
     out->frames = frames;
 }
 
-/* Splice `block` into the address-ordered free list. Keeping the list sorted by
- * address is what lets kfree find and merge physical neighbours later (task
- * 1.3.4); no merging happens here yet. */
-static void freelist_insert(heap_t *heap, block_header_t *block)
+/* One past the block's last payload byte: where the next physically adjacent
+ * block would begin. */
+static inline uint8_t *block_end(const block_header_t *b)
 {
-    block_header_t **link = &heap->free_list;
-    while (*link && *link < block)
-        link = &(*link)->next;
-    block->next = *link;
-    *link = block;
+    return (uint8_t *)(b + 1) + b->size;
+}
+
+/* Splice `block` into the address-ordered free list and merge it with either
+ * immediate neighbour it is physically contiguous with, so a run of freed
+ * blocks collapses back into one. Absorbing a neighbour reclaims that
+ * neighbour's header as payload too. Returns the surviving (possibly merged)
+ * block. */
+static block_header_t *freelist_insert(heap_t *heap, block_header_t *block)
+{
+    block->free = 1;
+
+    /* Locate the insertion point, tracking the predecessor so we can check both
+     * sides for adjacency. */
+    block_header_t *prev = NULL;
+    block_header_t *next = heap->free_list;
+    while (next && next < block) {
+        prev = next;
+        next = next->next;
+    }
+
+    block->next = next;
+    if (prev)
+        prev->next = block;
+    else
+        heap->free_list = block;
+
+    /* Merge forward: block's end meets next's start. */
+    if (next && block_end(block) == (uint8_t *)next) {
+        block->size += sizeof(block_header_t) + next->size;
+        block->next = next->next;
+    }
+
+    /* Merge backward: prev's end meets block's start. */
+    if (prev && block_end(prev) == (uint8_t *)block) {
+        prev->size += sizeof(block_header_t) + block->size;
+        prev->next = block->next;
+        block = prev;
+    }
+
+    return block;
 }
 
 /* Grow the heap by enough whole frames to hold a `need`-byte payload plus its
@@ -87,9 +122,7 @@ static block_header_t *heap_grow(heap_t *heap, size_t need)
 
     block_header_t *block = (block_header_t *)first;
     block->size = bytes - sizeof(block_header_t);
-    block->free = 1;
-    freelist_insert(heap, block);
-    return block;
+    return freelist_insert(heap, block);
 }
 
 void *kmalloc(heap_t *heap, size_t size)
@@ -129,4 +162,19 @@ void *kmalloc(heap_t *heap, size_t size)
         if (grown || !heap_grow(heap, need))
             return NULL;
     }
+}
+
+void kfree(heap_t *heap, void *ptr)
+{
+    if (!ptr)
+        return;
+
+    block_header_t *block = (block_header_t *)ptr - 1;
+
+    /* Guard against a double free: re-inserting a block already on the list
+     * would corrupt it. A live allocation always has free == 0. */
+    if (block->free)
+        return;
+
+    freelist_insert(heap, block);
 }

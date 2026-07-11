@@ -41,4 +41,10 @@ void heap_init(pmm_t *frames, heap_t *out);
  * zeroed (see kzalloc). */
 void *kmalloc(heap_t *heap, size_t size);
 
+/* Return a block obtained from kmalloc back to `heap`, coalescing it with any
+ * adjacent free neighbours. `ptr` may be NULL (no-op). Passing a pointer not
+ * from kmalloc, or freeing the same pointer twice, is undefined — though a
+ * plain double free is caught and ignored. */
+void kfree(heap_t *heap, void *ptr);
+
 #endif /* _KMALLOC_H */

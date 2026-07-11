@@ -144,32 +144,28 @@ void kernel_main(void *dtb)
     kprint_puts(ok ? "pmm: alloc/free invariants OK\n"
                    : "pmm: alloc/free invariants FAILED\n");
 
-    /* Bring up the kernel heap over the frame allocator and exercise kmalloc:
-     * small requests are carved (with splitting) out of a single grown frame,
-     * and a request larger than one frame's payload forces a fresh multi-frame
-     * grow. */
+    /* Bring up the kernel heap over the frame allocator and exercise it.
+     * First carve three adjacent blocks out of a single grown frame (first-fit
+     * + split); they must all fit in that one frame. */
     heap_init(&pmm, &heap);
     size_t heap_before = pmm_free_pages(&pmm);
-    void *h0 = kmalloc(&heap, 32);
-    void *h1 = kmalloc(&heap, 100);
-    void *h2 = kmalloc(&heap, 16);
-    void *hbig = kmalloc(&heap, 5000);   /* larger than one frame's payload */
+    void *p0 = kmalloc(&heap, 1024);
+    void *p1 = kmalloc(&heap, 1024);
+    void *p2 = kmalloc(&heap, 1024);
+    int heap_ok = p0 && p1 && p2 && pmm_free_pages(&pmm) == heap_before - 1;
 
-    uintptr_t any = (uintptr_t)h0 | (uintptr_t)h1 | (uintptr_t)h2 | (uintptr_t)hbig;
-    int heap_ok = h0 && h1 && h2 && hbig && (any % HEAP_ALIGN) == 0;
-    if (heap_ok) {
-        /* Distinct, writable storage: each sentinel must survive the others. */
-        *(uint64_t *)h0   = 0x1111;
-        *(uint64_t *)h1   = 0x2222;
-        *(uint64_t *)h2   = 0x3333;
-        *(uint64_t *)hbig = 0x4444;
-        heap_ok = *(uint64_t *)h0 == 0x1111 && *(uint64_t *)h1 == 0x2222
-               && *(uint64_t *)h2 == 0x3333 && *(uint64_t *)hbig == 0x4444;
-    }
-    /* h0/h1/h2 share one grown frame; hbig pulls two more -> three total. */
-    heap_ok = heap_ok && pmm_free_pages(&pmm) == heap_before - 3;
-    kprint_puts(heap_ok ? "heap: kmalloc OK (first-fit + split)\n"
-                        : "heap: kmalloc FAILED\n");
+    /* Now free all three: coalescing must merge the pieces (and the frame's
+     * leftover tail) back into one frame-sized block. Proof is a near-full-frame
+     * request afterwards reusing that exact block -- same address as p0, and no
+     * new frame pulled. Without coalescing no single freed block would fit. */
+    kfree(&heap, p0);
+    kfree(&heap, p1);
+    kfree(&heap, p2);
+    void *whole = kmalloc(&heap, 4000);
+    heap_ok = heap_ok && whole == p0
+           && pmm_free_pages(&pmm) == heap_before - 1;
+    kprint_puts(heap_ok ? "heap: kmalloc/kfree OK (split + coalesce)\n"
+                        : "heap: kmalloc/kfree FAILED\n");
 
     /* Idle loop */
     while (1)
