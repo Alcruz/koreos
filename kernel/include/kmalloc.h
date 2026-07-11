@@ -7,10 +7,9 @@
 #include "pmm.h"
 
 /* Kernel heap: an explicit free list of variable-size blocks, backed by frames
- * pulled from the physical frame allocator on demand.
- *
- * This header defines the on-heap layout (task 1.3.1). Growth (heap_grow),
- * kmalloc, kfree, and kzalloc build on these types in later tasks.
+ * pulled from the physical frame allocator on demand. The per-block header
+ * layout is private to kmalloc.c; callers only touch the pointers kmalloc hands
+ * back and the opaque heap_t below.
  */
 
 /* AArch64 AAPCS64 keeps the stack — and, by convention, any general allocator's
@@ -19,44 +18,27 @@
  * is a multiple of this, and every request size is rounded up to it. */
 #define HEAP_ALIGN 16UL
 
-/* Per-block bookkeeping, stored immediately before the payload. The pointer a
- * caller receives is the byte just past this header, i.e. (block_header_t *)h + 1.
- *
- * Kept to exactly one alignment unit (16 bytes) so that, given a 16-aligned
- * block start, the payload right after the header is 16-aligned too. `size` and
- * `free` share a single 64-bit word to hit that size: because sizes are always
- * rounded up to HEAP_ALIGN the top bit is free to spare for the flag.
- *
- *   next  links free blocks together; only meaningful while `free` is set.
- *   size  payload capacity in bytes, excluding this header.
- *   free  1 while the block sits on the free list, 0 once handed out.
- */
-typedef struct block_header {
-    struct block_header *next;
-    size_t               size : 63;
-    size_t               free : 1;
-} block_header_t;
-
-_Static_assert(sizeof(block_header_t) == HEAP_ALIGN,
-               "block header must be exactly one alignment unit so payloads stay 16-aligned");
+/* Per-block bookkeeping; layout is defined in kmalloc.c. heap_t only stores a
+ * pointer to it, so an incomplete type is all this header needs. */
+struct block_header;
 
 /* One kernel heap. Callers treat this as opaque and pass it to the heap_*
  * entry points; heap_init fills it in. The free list is kept address-ordered so
  * kfree can coalesce with adjacent neighbours (task 1.3.4). */
 typedef struct heap {
-    block_header_t *free_list;   /* address-ordered free blocks, NULL when empty */
-    pmm_t          *frames;      /* frame source used to grow the heap */
+    struct block_header *free_list;   /* address-ordered free blocks, NULL when empty */
+    pmm_t               *frames;      /* frame source used to grow the heap */
 } heap_t;
 
 /* Bring up an empty heap that grows by pulling frames from `frames`. No frames
  * are reserved up front; the first allocation grows the heap (task 1.3.2). */
 void heap_init(pmm_t *frames, heap_t *out);
 
-/* Grow the heap by enough whole frames to hold a `need`-byte payload plus its
- * header, wrap them in one free block, and link it (address-ordered) into the
- * free list. Returns the new block, or NULL if the frame allocator can't hand
- * back a contiguous run that large. kmalloc falls back to this when no existing
- * block fits; also exposed for the boot self-test. */
-block_header_t *heap_grow(heap_t *heap, size_t need);
+/* Allocate at least `size` bytes from `heap`, 16-byte aligned. First-fit over
+ * the free list; a block big enough is split when the leftover can stand on its
+ * own, otherwise handed over whole. Grows the heap once and retries if nothing
+ * fits. Returns NULL on a zero request or when growth fails. The memory is not
+ * zeroed (see kzalloc). */
+void *kmalloc(heap_t *heap, size_t size);
 
 #endif /* _KMALLOC_H */
