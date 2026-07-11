@@ -10,9 +10,7 @@
  */
 
 #include "../include/pmm.h"
-
-#define ALIGN_DOWN(x) ((x) & ~(PAGE_SIZE - 1))
-#define ALIGN_UP(x)   (((x) + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1))
+#include "../include/align.h"
 
 static inline void bm_set(pmm_t *p, size_t i)   { p->bitmap[i >> 3] |= (uint8_t)(1u << (i & 7)); }
 static inline void bm_clear(pmm_t *p, size_t i) { p->bitmap[i >> 3] &= (uint8_t)~(1u << (i & 7)); }
@@ -23,8 +21,8 @@ static inline int  bm_test(const pmm_t *p, size_t i) { return (p->bitmap[i >> 3]
 /* Mark every whole frame fully contained in [start, end) as free. */
 static void free_range(pmm_t *p, uint64_t start, uint64_t end)
 {
-    start = ALIGN_UP(start);
-    end = ALIGN_DOWN(end);
+    start = align_up(start, PAGE_SIZE);
+    end = align_down(end, PAGE_SIZE);
     for (uint64_t a = start; a < end; a += PAGE_SIZE) {
         size_t i = (a - p->base) >> PAGE_SHIFT;
         if (i < p->total_frames && bm_test(p, i)) {
@@ -57,7 +55,7 @@ static size_t bitmap_size(const memmap_t *map)
 {
     uint64_t lo, hi;
     map_span(map, &lo, &hi);
-    size_t total = (size_t)((ALIGN_DOWN(hi) - ALIGN_DOWN(lo)) >> PAGE_SHIFT);
+    size_t total = (size_t)((align_down(hi, PAGE_SIZE) - align_down(lo, PAGE_SIZE)) >> PAGE_SHIFT);
     return (total + 7) / 8;
 }
 
@@ -79,8 +77,8 @@ bool pmm_init(memmap_t *map, pmm_t *out)
     uint64_t lo, hi;
     map_span(map, &lo, &hi);
 
-    out->base = ALIGN_DOWN(lo);
-    out->end = ALIGN_DOWN(hi);
+    out->base = align_down(lo, PAGE_SIZE);
+    out->end = align_down(hi, PAGE_SIZE);
     out->total_frames = (size_t)((out->end - out->base) >> PAGE_SHIFT);
     out->bitmap = (uint8_t *)(uintptr_t)storage;
 
