@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include "memmap.h"
 #include "pmm.h"
+#include "mmio.h"
 
 /* AArch64 memory management unit setup.
  *
@@ -121,12 +122,15 @@ void mmu_enable(const uint64_t *root);
 
 /* Build the kernel's initial identity translation tables from `map`: every RAM
  * region (usable and reserved alike) is mapped as Normal cacheable memory, and
- * the platform's PL011 UART MMIO page is mapped as Device-nGnRnE. Tables are
+ * each of the `n_mmio` `mmio` regions (the PL011 UART page, the GICv2
+ * distributor/CPU-interface banks, ...) is mapped as Device-nGnRnE. Tables are
  * allocated one 4 KiB frame at a time from `pmm`. Returns the L0 table — which
  * is itself identity-mapped, so its VA equals the PA to load into TTBR0_EL1
  * later — or NULL if the pmm ran out of frames. Does NOT enable translation;
  * that is a separate step. */
-uint64_t *mmu_build_page_tables(const memmap_t *map, pmm_t *pmm);
+uint64_t *mmu_build_page_tables(const memmap_t *map,
+                                const mmio_region_t *mmio, size_t n_mmio,
+                                pmm_t *pmm);
 
 /* Walk `root` for virtual address `va` and return the leaf block/page
  * descriptor, or 0 if `va` is unmapped. For verifying the tables before the

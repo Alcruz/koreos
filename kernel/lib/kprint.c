@@ -1,5 +1,5 @@
 #include "../include/kprint.h"
-#include "../include/serial.h"
+#include "../include/core/serial/serial.h"
 
 /* serial_* is referenced only here, so the serial backend can be swapped out
  * by changing these two wrappers. */

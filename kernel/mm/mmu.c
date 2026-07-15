@@ -1,5 +1,4 @@
 #include "../include/mmu.h"
-#include "../drivers/serial/pl011.h"   /* UART_BASE: the MMIO page we map */
 
 /* Load the memory attribute indirection register. An ISB afterwards forces the
  * write to take effect before subsequent context-dependent instructions —
@@ -127,7 +126,9 @@ static bool map_range(uint64_t *l0, uint64_t va, uint64_t pa, uint64_t size,
     return true;
 }
 
-uint64_t *mmu_build_page_tables(const memmap_t *map, pmm_t *pmm)
+uint64_t *mmu_build_page_tables(const memmap_t *map,
+                                const mmio_region_t *mmio, size_t n_mmio,
+                                pmm_t *pmm)
 {
     uint64_t *l0 = alloc_table(pmm);
     if (!l0)
@@ -142,9 +143,12 @@ uint64_t *mmu_build_page_tables(const memmap_t *map, pmm_t *pmm)
                        map->range[i].size, PTE_NORMAL, pmm))
             return NULL;
 
-    /* Platform MMIO: the PL011 UART occupies a single 4 KiB register page. */
-    if (!map_range(l0, UART_BASE, UART_BASE, PAGE_SIZE, PTE_DEVICE, pmm))
-        return NULL;
+    /* Platform MMIO the caller handed us (UART page, GICv2 banks, ...) as
+     * strongly-ordered Device memory. */
+    for (size_t i = 0; i < n_mmio; i++)
+        if (!map_range(l0, mmio[i].base, mmio[i].base, mmio[i].size,
+                       PTE_DEVICE, pmm))
+            return NULL;
 
     return l0;
 }
