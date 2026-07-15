@@ -1,12 +1,12 @@
-#include "../include/serial.h"
+#include "../include/core/serial/serial.h"
 #include "../include/kprint.h"
 #include "../include/memmap.h"
-#include "../include/fdt.h"
+#include "../include/core/fdt.h"
 #include "../include/pmm.h"
 #include "../include/kmalloc.h"
 #include "../include/mmu.h"
+#include "../include/mmio.h"
 #include "../include/panic.h"
-#include "../drivers/serial/pl011.h"   /* UART_BASE, for the mapping check */
 
 /* Provided by the linker script (arch/arm64/boot/linker.ld). */
 extern char _kernel_start[];
@@ -23,11 +23,20 @@ static heap_t heap;
 
 /* Turn whatever the firmware told us into a physical RAM layout: size RAM from
  * the DTB's /memory nodes, then carve out the regions that are already spoken
- * for (the kernel image and the device tree itself). */
+ * for (the kernel image and the device tree itself). The fdt layer just walks
+ * the tree and hands back the /memory register windows; deciding they are
+ * usable RAM is our call. */
 static void memory_init(const void *dtb, memmap_t *map)
 {
-    if (fdt_get_memory(dtb, map) <= 0)
+    /* More /memory windows than any board we target describes. */
+    fdt_device_t ram[8];
+    int n = fdt_get_all_devices(dtb, "memory", 8, ram);
+    if (n <= 0)
         panic("memory: no /memory node in DTB; cannot size RAM");
+
+    memmap_init(map);
+    for (int i = 0; i < n; i++)
+        memmap_add_ram(map, ram[i].base, ram[i].size);
 
     if (!memmap_reserve(map, (uintptr_t)_kernel_start,
                         (uintptr_t)_kernel_end - (uintptr_t)_kernel_start))
@@ -36,6 +45,47 @@ static void memory_init(const void *dtb, memmap_t *map)
     if (fdt_valid(dtb))
         if (!memmap_reserve(map, (uintptr_t)dtb, fdt_totalsize(dtb)))
             panic("memory: map full reserving device tree");
+}
+
+/* "compatible" strings QEMU virt uses for its GICv2 node, most-specific first.
+ * This board knowledge lives in main.c; fdt.c only walks the tree. */
+static const char *const GICV2_COMPATIBLE[] = {
+    "arm,cortex-a15-gic", /* what -cpu cortex-a57 on virt presents */
+    "arm,gic-400",
+};
+
+/* Resolve the GICv2 register banks from the DTB's interrupt-controller node
+ * into two MMIO regions: `banks[0]` is the distributor (GICD, reg[0]) and
+ * `banks[1]` the per-CPU interface (GICC, reg[1]), each a physical range the
+ * caller maps as Device memory. The addresses are a board property, never an
+ * architectural constant, so the DTB is the sole authority — there is no
+ * hardcoded fallback, exactly as RAM is sized from /memory. Returns true on
+ * success, or false if the blob has no usable node, which the caller treats as
+ * fatal since there is nothing to fall back to. Out param last per the codebase
+ * convention. */
+static bool gic_resolve(const void *dtb, mmio_region_t banks[2])
+{
+    for (unsigned i = 0; i < sizeof(GICV2_COMPATIBLE) / sizeof(*GICV2_COMPATIBLE);
+         i++)
+    {
+        if (fdt_get_reg(dtb, GICV2_COMPATIBLE[i], 0,
+                        &banks[0].base, &banks[0].size) == 0 &&
+            fdt_get_reg(dtb, GICV2_COMPATIBLE[i], 1,
+                        &banks[1].base, &banks[1].size) == 0)
+            return true;
+    }
+    return false;
+}
+
+/* Resolve the PL011 UART's register window from the DTB into `out`. This is the
+ * sole authority for the console base: serial_init is handed out->base, and the
+ * MMU later maps the same region as Device memory. The address is a board
+ * property, never an architectural constant, so a missing PL011 node is fatal —
+ * there is nothing to fall back to. Returns true on success, false if the blob
+ * has no PL011 node. Out param last per the codebase convention. */
+static bool uart_resolve(const void *dtb, mmio_region_t *out)
+{
+    return fdt_get_reg(dtb, "arm,pl011", 0, &out->base, &out->size) == 0;
 }
 
 /* Stand up the frame allocator over `map`. pmm_init reserves its own metadata
@@ -87,9 +137,9 @@ static void mmu_check(const uint64_t *root, uint64_t va, const char *what)
     uint64_t idx = (desc >> 2) & 7;
     kprint_puts(" -> desc ");
     kprint_hex(desc);
-    kprint_puts(idx == MAIR_IDX_NORMAL ? "  Normal\n"
-              : idx == MAIR_IDX_DEVICE ? "  Device\n"
-                                       : "  ??\n");
+    kprint_puts(idx == MAIR_IDX_NORMAL   ? "  Normal\n"
+                : idx == MAIR_IDX_DEVICE ? "  Device\n"
+                                         : "  ??\n");
 }
 
 /* Smoke check that the heap is alive after bring-up: one alloc round-trips and
@@ -117,7 +167,15 @@ static int heap_smoke(heap_t *h)
 /* x0 on entry (the DTB pointer) is passed straight through from _start. */
 void kernel_main(void *dtb)
 {
-    serial_init();
+    /* Resolve the console's register window from the DTB before anything can
+     * print: the PL011 base is a board property, not a compile-time constant.
+     * A missing node is fatal, though the panic itself has no console to speak
+     * to — there is nothing to fall back to. */
+    mmio_region_t uart;
+    if (!uart_resolve(dtb, &uart))
+        panic("uart: no PL011 node in DTB");
+
+    serial_init(uart.base);
     kprint_puts("Koreos!\n");
 
     memmap_t map;
@@ -132,9 +190,24 @@ void kernel_main(void *dtb)
     kprint_hex(mair);
     kprint_puts("\n");
 
+    /* Resolve the GICv2 register banks from the DTB, then hand the MMU the
+     * platform MMIO it must map as Device memory. main.c owns this board
+     * knowledge; mmu.c just maps whatever ranges it is given. As with RAM
+     * sizing, a missing node is fatal rather than guessed. The UART region was
+     * already resolved above to bring the console up. */
+    mmio_region_t gic[2];
+    if (!gic_resolve(dtb, gic))
+        panic("gic: no GICv2 interrupt-controller node in DTB");
+    const mmio_region_t mmio[] = {
+        uart,   /* PL011 UART register page   */
+        gic[0], /* GICD distributor           */
+        gic[1], /* GICC CPU interface         */
+    };
+
     /* Build the identity translation tables (MMU stays off for now). */
     size_t pt_before = pmm_free_pages(&pmm);
-    uint64_t *root = mmu_build_page_tables(&map, &pmm);
+    uint64_t *root = mmu_build_page_tables(&map, mmio,
+                                           sizeof(mmio) / sizeof(*mmio), &pmm);
     if (!root)
         panic("mmu: out of memory building page tables");
     kprint_puts("mmu: page tables built, TTBR0 root = ");
@@ -143,7 +216,9 @@ void kernel_main(void *dtb)
     kprint_dec(pt_before - pmm_free_pages(&pmm));
     kprint_puts(" frames used\n");
     mmu_check(root, (uint64_t)_kernel_start, "kernel");
-    mmu_check(root, UART_BASE, "uart  ");
+    mmu_check(root, uart.base, "uart  ");
+    mmu_check(root, gic[0].base, "gicd  ");
+    mmu_check(root, gic[1].base, "gicc  ");
 
     /* Switch translation on. If any of the identity map, the UART mapping, or
      * TCR is wrong, the CPU faults here and the next line never prints. That it

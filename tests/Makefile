@@ -13,7 +13,7 @@ CC ?= cc
 CFLAGS := -std=c11 -Wall -Wextra -g -O1 \
           -fsanitize=address,undefined -fno-omit-frame-pointer \
           -DUNITY_SUPPORT_64 \
-          -I../kernel/include -Iunity
+          -I../kernel/include -I../kernel/include/core -I../kernel/include/core/serial -Iunity
 
 # Arch/OS-specific so host-native and container (cross-env) builds never collide
 # in the same tree — these are host binaries and may be built in either place.
@@ -24,7 +24,7 @@ UNITY_SRC := unity/unity.c
 # harmless; add here as new suites need them. Modules with unresolved externals
 # (e.g. kprint.c needs a serial backend) can't live here — see EXTRA_* below.
 KERNEL_SRC := ../kernel/mm/pmm.c ../kernel/mm/memmap.c ../kernel/mm/kmalloc.c \
-              ../kernel/lib/string.c ../kernel/lib/fdt.c
+              ../kernel/lib/string.c ../kernel/drivers/fdt/fdt.c
 
 # Per-suite extra sources, appended only to that one suite's link. kprint.c calls
 # the serial backend, which test_kprint.c stubs out, so it must not be linked
@@ -39,7 +39,7 @@ all: test
 test: $(SUITES)
 	@fail=0; for r in $(SUITES); do echo "=== $$r ==="; ./$$r || fail=1; done; exit $$fail
 
-$(BUILD)/%: test_%.c $(UNITY_SRC) $(KERNEL_SRC) $(EXTRA_kprint) unity/unity.h ../kernel/include/*.h
+$(BUILD)/%: test_%.c $(UNITY_SRC) $(KERNEL_SRC) $(EXTRA_kprint) unity/unity.h ../kernel/include/*.h ../kernel/include/core/*.h ../kernel/include/core/serial/*.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -o $@ test_$*.c $(UNITY_SRC) $(KERNEL_SRC) $(EXTRA_$*)
 
