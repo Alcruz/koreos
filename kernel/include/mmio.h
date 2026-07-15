@@ -19,4 +19,15 @@ static inline uint32_t mmio_read(uintptr_t reg) {
     return *(volatile uint32_t *)reg;
 }
 
+/* Byte-wide accessors. The GICv2 priority and target registers are arrays of
+ * one byte per interrupt and are addressed by byte offset, so they need 8-bit
+ * access rather than the 32-bit path above. */
+static inline void mmio_write8(uintptr_t reg, uint8_t val) {
+    *(volatile uint8_t *)reg = val;
+}
+
+static inline uint8_t mmio_read8(uintptr_t reg) {
+    return *(volatile uint8_t *)reg;
+}
+
 #endif /* _MMIO_H */

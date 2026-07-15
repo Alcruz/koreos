@@ -6,6 +6,7 @@
 #include "../include/kmalloc.h"
 #include "../include/mmu.h"
 #include "../include/mmio.h"
+#include "../include/core/irqchip/gicv2.h"
 #include "../include/panic.h"
 
 /* Provided by the linker script (arch/arm64/boot/linker.ld). */
@@ -230,6 +231,21 @@ void kernel_main(void *dtb)
     kprint_puts("mmu: enabled, SCTLR_EL1 = ");
     kprint_hex(sctlr);
     kprint_puts(" (translation live)\n");
+
+    /* Bring up the interrupt controller now that its register banks are mapped
+     * as Device memory. Smoke-test the distributor by round-tripping a spare
+     * SPI through enable/disable and reading the enable bit back — a real
+     * end-to-end proof waits for a wired IRQ source (a timer, step 2.2). */
+    gic_init(gic[0].base, gic[1].base);
+    const uint32_t spi = 42; /* a spare SPI, unused by any device we drive */
+    gic_enable_irq(spi);
+    uint32_t en = mmio_read(gic[0].base + GICD_ISENABLER + (spi / 32) * 4);
+    int gic_ok = (en & (1u << (spi % 32))) != 0;
+    gic_disable_irq(spi);
+    uint32_t dis = mmio_read(gic[0].base + GICD_ISENABLER + (spi / 32) * 4);
+    gic_ok = gic_ok && (dis & (1u << (spi % 32))) == 0;
+    kprint_puts(gic_ok ? "gic: enable/disable round-trip OK\n"
+                       : "gic: enable/disable round-trip FAILED\n");
 
     size_t before = pmm_free_pages(&pmm);
     pmm_page_t *a = pmm_alloc_page(&pmm);
