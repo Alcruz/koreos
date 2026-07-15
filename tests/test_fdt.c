@@ -1,12 +1,12 @@
 /* Host-side unit tests for the flattened device tree parser (kernel/lib/fdt.c).
  *
- * fdt.c reads the DTB QEMU hands the kernel in x0 and pulls the RAM regions out
- * of its /memory nodes — a boot-critical path (a wrong parse means the kernel
- * mismeasures RAM and panics or corrupts memory). To exercise it on the host we
- * assemble minimal but real device trees byte by byte with the builder below:
- * a big-endian header, an empty reservation block, a structure block of tokens,
- * and a strings block. The parser only ever reads back through the public
- * fdt_valid / fdt_totalsize / fdt_get_memory entry points.
+ * fdt.c walks the DTB QEMU hands the kernel in x0 and locates entries — a
+ * boot-critical path (a wrong parse means the kernel mismeasures RAM and panics
+ * or corrupts memory). To exercise it on the host we assemble minimal but real
+ * device trees byte by byte with the builder below: a big-endian header, an
+ * empty reservation block, a structure block of tokens, and a strings block.
+ * The parser only ever reads back through the public fdt_valid / fdt_totalsize
+ * / fdt_for_each_reg / fdt_get_reg entry points.
  *
  * The assembled blob is 8-byte aligned so the parser's 32-bit big-endian reads
  * are well-defined under UBSan.
@@ -17,7 +17,6 @@
 
 #include "unity.h"
 #include "fdt.h"
-#include "memmap.h"
 
 /* Structure-block tokens (mirrors the private constants in fdt.c). */
 #define FDT_BEGIN_NODE 0x1U
@@ -183,9 +182,13 @@ static void test_fdt_totalsize_matches_assembled_length(void)
     TEST_ASSERT_EQUAL_UINT32(dtb.len, fdt_totalsize(blob));
 }
 
-/* --- memory discovery -------------------------------------------------- */
+/* --- device enumeration (fdt_get_all_devices) -------------------------- */
 
-static void test_get_memory_reads_single_region(void)
+/* fdt_get_all_devices attaches no meaning to the register windows it returns —
+ * turning them into a sorted RAM map is the caller's job — so these tests
+ * assert on the raw windows the walk yields, in tree order. */
+
+static void test_get_all_devices_reads_single_window(void)
 {
     /* addr = 2 cells, size = 1 cell: reg = <0x0 0x40000000  0x20000000>. */
     uint32_t reg[] = {0x00000000, 0x40000000, 0x20000000};
@@ -197,15 +200,13 @@ static void test_get_memory_reads_single_region(void)
     end_node();
     const void *blob = dtb_finalize();
 
-    memmap_t m;
-    TEST_ASSERT_EQUAL_INT(1, fdt_get_memory(blob, &m));
-    TEST_ASSERT_EQUAL_UINT64(1, m.count);
-    TEST_ASSERT_EQUAL_UINT64(0x40000000, m.range[0].base);
-    TEST_ASSERT_EQUAL_UINT64(0x20000000, m.range[0].size);
-    TEST_ASSERT_EQUAL_INT(MEM_USABLE, m.range[0].kind);
+    fdt_device_t dev[8];
+    TEST_ASSERT_EQUAL_INT(1, fdt_get_all_devices(blob, "memory", 8, dev));
+    TEST_ASSERT_EQUAL_UINT64(0x40000000, dev[0].base);
+    TEST_ASSERT_EQUAL_UINT64(0x20000000, dev[0].size);
 }
 
-static void test_get_memory_reads_multiple_regions_in_one_reg(void)
+static void test_get_all_devices_reads_multiple_windows_in_one_reg(void)
 {
     /* Two <addr,size> pairs packed into one reg property. */
     uint32_t reg[] = {
@@ -223,16 +224,15 @@ static void test_get_memory_reads_multiple_regions_in_one_reg(void)
     end_node();
     const void *blob = dtb_finalize();
 
-    memmap_t m;
-    TEST_ASSERT_EQUAL_INT(2, fdt_get_memory(blob, &m));
-    TEST_ASSERT_EQUAL_UINT64(2, m.count);
-    TEST_ASSERT_EQUAL_UINT64(0x40000000, m.range[0].base);
-    TEST_ASSERT_EQUAL_UINT64(0x10000000, m.range[0].size);
-    TEST_ASSERT_EQUAL_UINT64(0x80000000, m.range[1].base);
-    TEST_ASSERT_EQUAL_UINT64(0x08000000, m.range[1].size);
+    fdt_device_t dev[8];
+    TEST_ASSERT_EQUAL_INT(2, fdt_get_all_devices(blob, "memory", 8, dev));
+    TEST_ASSERT_EQUAL_UINT64(0x40000000, dev[0].base);
+    TEST_ASSERT_EQUAL_UINT64(0x10000000, dev[0].size);
+    TEST_ASSERT_EQUAL_UINT64(0x80000000, dev[1].base);
+    TEST_ASSERT_EQUAL_UINT64(0x08000000, dev[1].size);
 }
 
-static void test_get_memory_merges_separate_memory_nodes_sorted(void)
+static void test_get_all_devices_collects_separate_nodes_in_tree_order(void)
 {
     uint32_t hi[] = {0x00000000, 0x80000000, 0x08000000};
     uint32_t lo[] = {0x00000000, 0x40000000, 0x10000000};
@@ -246,14 +246,14 @@ static void test_get_memory_merges_separate_memory_nodes_sorted(void)
     end_node();
     const void *blob = dtb_finalize();
 
-    memmap_t m;
-    TEST_ASSERT_EQUAL_INT(2, fdt_get_memory(blob, &m));
-    /* memmap keeps ranges sorted by base regardless of node order. */
-    TEST_ASSERT_EQUAL_UINT64(0x40000000, m.range[0].base);
-    TEST_ASSERT_EQUAL_UINT64(0x80000000, m.range[1].base);
+    /* The walk yields windows in tree order; any sorting is the caller's concern. */
+    fdt_device_t dev[8];
+    TEST_ASSERT_EQUAL_INT(2, fdt_get_all_devices(blob, "memory", 8, dev));
+    TEST_ASSERT_EQUAL_UINT64(0x80000000, dev[0].base);
+    TEST_ASSERT_EQUAL_UINT64(0x40000000, dev[1].base);
 }
 
-static void test_get_memory_honours_custom_cell_counts(void)
+static void test_get_all_devices_honours_custom_cell_counts(void)
 {
     /* 32-bit addressing: addr = 1 cell, size = 1 cell. */
     uint32_t reg[] = {0x40000000, 0x20000000};
@@ -264,15 +264,15 @@ static void test_get_memory_honours_custom_cell_counts(void)
     end_node();
     const void *blob = dtb_finalize();
 
-    memmap_t m;
-    TEST_ASSERT_EQUAL_INT(1, fdt_get_memory(blob, &m));
-    TEST_ASSERT_EQUAL_UINT64(0x40000000, m.range[0].base);
-    TEST_ASSERT_EQUAL_UINT64(0x20000000, m.range[0].size);
+    fdt_device_t dev[8];
+    TEST_ASSERT_EQUAL_INT(1, fdt_get_all_devices(blob, "memory", 8, dev));
+    TEST_ASSERT_EQUAL_UINT64(0x40000000, dev[0].base);
+    TEST_ASSERT_EQUAL_UINT64(0x20000000, dev[0].size);
 }
 
-static void test_get_memory_ignores_non_memory_nodes(void)
+static void test_get_all_devices_ignores_unmatched_nodes(void)
 {
-    /* A sibling node with a reg property must not be mistaken for RAM. */
+    /* A sibling node with a reg property must not match the "memory" prefix. */
     uint32_t cpureg[] = {0x00000000};
     uint32_t memreg[] = {0x00000000, 0x40000000, 0x20000000};
     begin_root(2, 1);
@@ -285,25 +285,133 @@ static void test_get_memory_ignores_non_memory_nodes(void)
     end_node();
     const void *blob = dtb_finalize();
 
-    memmap_t m;
-    TEST_ASSERT_EQUAL_INT(1, fdt_get_memory(blob, &m));
-    TEST_ASSERT_EQUAL_UINT64(0x40000000, m.range[0].base);
+    fdt_device_t dev[8];
+    TEST_ASSERT_EQUAL_INT(1, fdt_get_all_devices(blob, "memory", 8, dev));
+    TEST_ASSERT_EQUAL_UINT64(0x40000000, dev[0].base);
 }
 
-static void test_get_memory_rejects_invalid_blob(void)
+static void test_get_all_devices_caps_at_max(void)
 {
-    memmap_t m;
-    /* NULL and a bad-magic blob both fail, leaving an empty map. */
-    TEST_ASSERT_EQUAL_INT(-1, fdt_get_memory(NULL, &m));
-    TEST_ASSERT_EQUAL_UINT64(0, m.count);
+    /* Three windows but a buffer for two: only the first two are written and
+     * the return is capped at max, signalling possible truncation. */
+    uint32_t reg[] = {
+        0x00000000, 0x40000000, 0x10000000,
+        0x00000000, 0x80000000, 0x08000000,
+        0x00000000, 0x90000000, 0x08000000,
+    };
+    begin_root(2, 1);
+    begin_node("memory@40000000");
+    prop_cells("reg", reg, 9);
+    end_node();
+    end_node();
+    const void *blob = dtb_finalize();
+
+    fdt_device_t dev[2];
+    TEST_ASSERT_EQUAL_INT(2, fdt_get_all_devices(blob, "memory", 2, dev));
+    TEST_ASSERT_EQUAL_UINT64(0x40000000, dev[0].base);
+    TEST_ASSERT_EQUAL_UINT64(0x80000000, dev[1].base);
+}
+
+/* --- reg lookup by compatible ------------------------------------------ */
+
+/* Open a GICv2-style interrupt-controller node under the current root, with the
+ * given compatible stringlist bytes and one or two <addr,size> banks. */
+static void begin_intc(const char *compat, uint32_t compat_len,
+                       const uint32_t *reg, int ncells)
+{
+    begin_node("intc@8000000");
+    prop_bytes("compatible", compat, compat_len);
+    prop_cells("reg", reg, ncells);
+    end_node();
+}
+
+static void test_get_reg_reads_gic_banks(void)
+{
+    /* addr = 2 cells, size = 2 cells (QEMU virt): GICD then GICC. */
+    const char compat[] = "arm,cortex-a15-gic";
+    uint32_t reg[] = {
+        0x00000000, 0x08000000, 0x00000000, 0x00010000, /* GICD */
+        0x00000000, 0x08010000, 0x00000000, 0x00010000, /* GICC */
+    };
+    begin_root(2, 2);
+    begin_intc(compat, (uint32_t)sizeof(compat), reg, 8);
+    end_node();
+    const void *blob = dtb_finalize();
+
+    uint64_t base = 0, size = 0;
+    TEST_ASSERT_EQUAL_INT(0, fdt_get_reg(blob, compat, 0, &base, &size));
+    TEST_ASSERT_EQUAL_UINT64(0x08000000, base);
+    TEST_ASSERT_EQUAL_UINT64(0x00010000, size);
+
+    TEST_ASSERT_EQUAL_INT(0, fdt_get_reg(blob, compat, 1, &base, &size));
+    TEST_ASSERT_EQUAL_UINT64(0x08010000, base);
+    TEST_ASSERT_EQUAL_UINT64(0x00010000, size);
+}
+
+static void test_get_reg_matches_any_stringlist_entry(void)
+{
+    /* compatible is a NUL-separated list; a match on any entry counts. */
+    const char compat[] = "arm,cortex-a15-gic\0arm,gic-400";
+    uint32_t reg[] = {0x00000000, 0x08000000, 0x00000000, 0x00010000};
+    begin_root(2, 2);
+    begin_intc(compat, (uint32_t)sizeof(compat), reg, 4);
+    end_node();
+    const void *blob = dtb_finalize();
+
+    uint64_t base = 0, size = 0;
+    TEST_ASSERT_EQUAL_INT(0, fdt_get_reg(blob, "arm,gic-400", 0, &base, &size));
+    TEST_ASSERT_EQUAL_UINT64(0x08000000, base);
+}
+
+static void test_get_reg_selects_matching_node_not_sibling(void)
+{
+    /* A sibling device (the UART) must not be returned for the GIC lookup. */
+    const char uartc[] = "arm,pl011";
+    const char gicc[] = "arm,cortex-a15-gic";
+    uint32_t uartreg[] = {0x00000000, 0x09000000, 0x00000000, 0x00001000};
+    uint32_t gicreg[] = {0x00000000, 0x08000000, 0x00000000, 0x00010000};
+    begin_root(2, 2);
+    begin_node("pl011@9000000");
+    prop_bytes("compatible", uartc, (uint32_t)sizeof(uartc));
+    prop_cells("reg", uartreg, 4);
+    end_node();
+    begin_intc(gicc, (uint32_t)sizeof(gicc), gicreg, 4);
+    end_node();
+    const void *blob = dtb_finalize();
+
+    uint64_t base = 0, size = 0;
+    TEST_ASSERT_EQUAL_INT(0, fdt_get_reg(blob, gicc, 0, &base, &size));
+    TEST_ASSERT_EQUAL_UINT64(0x08000000, base);
+}
+
+static void test_get_reg_rejects_missing_node_index_and_blob(void)
+{
+    const char compat[] = "arm,cortex-a15-gic";
+    uint32_t reg[] = {0x00000000, 0x08000000, 0x00000000, 0x00010000};
+    begin_root(2, 2);
+    begin_intc(compat, (uint32_t)sizeof(compat), reg, 4); /* one bank only */
+    end_node();
+    const void *blob = dtb_finalize();
+
+    uint64_t base = 0, size = 0;
+    TEST_ASSERT_EQUAL_INT(-1, fdt_get_reg(blob, "arm,gic-500", 0, &base, &size));
+    TEST_ASSERT_EQUAL_INT(-1, fdt_get_reg(blob, compat, 1, &base, &size));
+    TEST_ASSERT_EQUAL_INT(-1, fdt_get_reg(NULL, compat, 0, &base, &size));
+    TEST_ASSERT_EQUAL_INT(-1, fdt_get_reg(blob, compat, -1, &base, &size));
+}
+
+static void test_get_all_devices_rejects_invalid_blob(void)
+{
+    fdt_device_t dev[8];
+    /* NULL and a bad-magic blob both fail. */
+    TEST_ASSERT_EQUAL_INT(-1, fdt_get_all_devices(NULL, "memory", 8, dev));
 
     begin_root(2, 1);
     end_node();
     const void *blob = dtb_finalize();
     dtb.buf[1] ^= 0xFF; /* break the magic */
 
-    TEST_ASSERT_EQUAL_INT(-1, fdt_get_memory(blob, &m));
-    TEST_ASSERT_EQUAL_UINT64(0, m.count);
+    TEST_ASSERT_EQUAL_INT(-1, fdt_get_all_devices(blob, "memory", 8, dev));
 }
 
 int main(void)
@@ -311,11 +419,16 @@ int main(void)
     UNITY_BEGIN();
     RUN_TEST(test_fdt_valid_accepts_good_magic_rejects_bad);
     RUN_TEST(test_fdt_totalsize_matches_assembled_length);
-    RUN_TEST(test_get_memory_reads_single_region);
-    RUN_TEST(test_get_memory_reads_multiple_regions_in_one_reg);
-    RUN_TEST(test_get_memory_merges_separate_memory_nodes_sorted);
-    RUN_TEST(test_get_memory_honours_custom_cell_counts);
-    RUN_TEST(test_get_memory_ignores_non_memory_nodes);
-    RUN_TEST(test_get_memory_rejects_invalid_blob);
+    RUN_TEST(test_get_all_devices_reads_single_window);
+    RUN_TEST(test_get_all_devices_reads_multiple_windows_in_one_reg);
+    RUN_TEST(test_get_all_devices_collects_separate_nodes_in_tree_order);
+    RUN_TEST(test_get_all_devices_honours_custom_cell_counts);
+    RUN_TEST(test_get_all_devices_ignores_unmatched_nodes);
+    RUN_TEST(test_get_all_devices_caps_at_max);
+    RUN_TEST(test_get_all_devices_rejects_invalid_blob);
+    RUN_TEST(test_get_reg_reads_gic_banks);
+    RUN_TEST(test_get_reg_matches_any_stringlist_entry);
+    RUN_TEST(test_get_reg_selects_matching_node_not_sibling);
+    RUN_TEST(test_get_reg_rejects_missing_node_index_and_blob);
     return UNITY_END();
 }
