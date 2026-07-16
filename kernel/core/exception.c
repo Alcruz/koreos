@@ -1,5 +1,6 @@
 #include "../include/kprint.h"
 #include "../include/panic.h"
+#include "../include/irq.h"
 
 /* Names for the 16 vector table entries, indexed by the type passed from
  * vectors.S. */
@@ -24,6 +25,15 @@ static const char *const exception_names[16] = {
 
 void handle_exception(unsigned long type, unsigned long *frame) {
     (void)frame; /* register file is saved; not decoded yet */
+
+    /* IRQ is index 1, 5, 9, or 13 in each of the four vector groups (see
+     * vectors.S) — every other vector is a fault, which is fatal here. A
+     * stray IRQ isn't: dispatch it and return to whatever was interrupted. */
+    unsigned long vec = type & 0xf;
+    if (vec == 1 || vec == 5 || vec == 9 || vec == 13) {
+        irq_dispatch();
+        return;
+    }
 
     unsigned long esr, elr, far, spsr;
     __asm__ volatile("mrs %0, esr_el1" : "=r"(esr));

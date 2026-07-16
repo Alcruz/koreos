@@ -7,6 +7,8 @@
 #include "../include/mmu.h"
 #include "../include/mmio.h"
 #include "../include/core/irqchip/gicv2.h"
+#include "../include/core/timer/timer.h"
+#include "../include/irq.h"
 #include "../include/panic.h"
 
 /* Provided by the linker script (arch/arm64/boot/linker.ld). */
@@ -165,6 +167,25 @@ static int heap_smoke(heap_t *h)
     return 1;
 }
 
+/* Ticks per second for the periodic timer smoke test. Fast enough to log
+ * several ticks within the fixed QEMU run window documented in CLAUDE.md
+ * (serial capture, sleep 3, kill), slow enough to keep the log readable. */
+#define TIMER_HZ 4
+
+static volatile unsigned tick_count;
+
+/* Registered against TIMER_IRQ; runs in interrupt context off the IRQ vector,
+ * so it re-arms the countdown itself before anything else touches the timer. */
+static void timer_tick(uint32_t irq)
+{
+    (void)irq;
+    timer_reload();
+    tick_count++;
+    kprint_puts("timer: tick ");
+    kprint_dec(tick_count);
+    kprint_putc('\n');
+}
+
 /* x0 on entry (the DTB pointer) is passed straight through from _start. */
 void kernel_main(void *dtb)
 {
@@ -264,7 +285,18 @@ void kernel_main(void *dtb)
                     ? "heap: smoke check OK (alloc/free/zero)\n"
                     : "heap: smoke check FAILED\n");
 
-    /* Idle loop */
+    /* Bring up the periodic timer: register its handler and enable it at the
+     * distributor before arming the countdown, so there is no window where a
+     * tick fires with nothing registered. IRQs stay masked at the core until
+     * everything above has run, then get unmasked right before the idle
+     * loop — the only place ticks are actually expected to land. */
+    irq_register(TIMER_IRQ, timer_tick);
+    gic_enable_irq(TIMER_IRQ);
+    timer_init(TIMER_HZ);
+    __asm__ volatile("msr daifclr, #2"); /* clear PSTATE.I: unmask IRQs */
+
+    /* Idle loop. Each wfe wakes on the timer IRQ, the vector dispatches to
+     * timer_tick, and control returns here to wait for the next one. */
     while (1)
     {
         __asm__ volatile("wfe");
