@@ -42,11 +42,11 @@ Goal: two kernel tasks time-slicing on a single CPU.
 - [x] `task_t` + `cpu_context_t` (callee-saved x19-x28, fp, lr, sp)
 - [x] `task_create` / `task_destroy` allocating stack from `pmm` and struct
       from `heap`
-- [ ] `switch_to(prev, next)` in asm — save/restore callee-saved + sp, return
+- [x] `switch_to(prev, next)` in asm — save/restore callee-saved + sp, return
       via `lr`
-- [ ] Task start trampoline that primes `ctx.lr` so a fresh task enters a C
+- [x] Task start trampoline that primes `ctx.lr` so a fresh task enters a C
       entry point cleanly
-- [ ] Run queue (FIFO round-robin using the intrusive `next` link)
+- [x] Run queue (FIFO round-robin using the intrusive `next` link)
 - [ ] Timer IRQ preempts the current task and calls `schedule()`
 - [ ] Idle task (single `wfe` loop) so the scheduler always has something to
       run
