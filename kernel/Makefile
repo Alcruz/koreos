@@ -11,7 +11,12 @@ OBJCOPY := $(CROSS_COMPILE)objcopy
 # the C11 freestanding headers available.
 GCC_INCLUDE := $(shell $(CC) -print-file-name=include)
 
-CFLAGS := -Wall -O2 -ffreestanding -nostdinc -nostdlib -fno-builtin -isystem $(GCC_INCLUDE)
+# -mgeneral-regs-only: don't emit FP/SIMD instructions. The kernel runs at EL1
+# with CPACR_EL1.FPEN clearing SIMD/FP access; without this flag, later gcc
+# versions (13+) auto-vectorise memset/memcpy-like paths and the kernel takes
+# a synchronous EC=0x07 the first time one runs.
+CFLAGS := -Wall -O2 -ffreestanding -nostdinc -nostdlib -fno-builtin \
+          -mgeneral-regs-only -isystem $(GCC_INCLUDE)
 ASFLAGS := -march=armv8-a
 LDFLAGS := -T arch/$(ARCH)/boot/linker.ld -nostdlib
 
