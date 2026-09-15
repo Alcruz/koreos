@@ -31,8 +31,9 @@ KERNEL_SRC := ../../kernel/mm/pmm.c ../../kernel/mm/memmap.c ../../kernel/mm/kma
 # into suites that don't provide that stub. task.c references task_trampoline,
 # defined in the arm64 asm stub, so it lives here too — test_task.c provides a
 # host stub.
-EXTRA_kprint := ../../kernel/lib/kprint.c
-EXTRA_task   := ../../kernel/core/task.c
+EXTRA_kprint   := ../../kernel/lib/kprint.c
+EXTRA_task     := ../../kernel/core/task.c
+EXTRA_runqueue := ../../kernel/core/task.c ../../kernel/core/runqueue.c
 
 # test_pmm.c -> build/pmm, etc.
 SUITES := $(patsubst test_%.c,$(BUILD)/%,$(wildcard test_*.c))
