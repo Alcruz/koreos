@@ -51,4 +51,18 @@ task_t *task_create(pmm_t *pmm, heap_t *heap);
  * struct to `heap`. `task` may be NULL (no-op). */
 void task_destroy(pmm_t *pmm, heap_t *heap, task_t *task);
 
+/* Save prev's callee-saved integer context (x19-x28, fp, lr, sp) into
+ * prev->ctx, restore next->ctx into the live registers, and return via the
+ * newly loaded lr. Caller-saved registers are the compiler's responsibility
+ * across this call. Both pointers must be non-NULL. */
+void switch_to(task_t *prev, task_t *next);
+
+/* Signature of a kernel task's entry function. */
+typedef void (*task_entry_fn)(void *arg);
+
+/* Prime `task` (fresh from task_create) so the next switch_to into it enters
+ * `fn(arg)` on its own kernel stack. Sets ctx.lr to the trampoline and stashes
+ * fn/arg in the callee-saved slots switch_to restores. */
+void task_start(task_t *task, task_entry_fn fn, void *arg);
+
 #endif /* _TASK_H */

@@ -203,6 +203,39 @@ static int task_smoke(pmm_t *pmm, heap_t *heap)
     return ok;
 }
 
+/* End-to-end proof that switch_to + task_trampoline compose: a demo task,
+ * primed to enter `demo_task_entry` on its own kernel stack, prints a marker
+ * line and switches back to kernel_main's context. Success is both the marker
+ * appearing on serial *and* execution resuming past switch_to in the caller. */
+static task_t *g_boot_task;
+static task_t *g_demo_task;
+
+static void demo_task_entry(void *arg)
+{
+    (void)arg;
+    kprint_puts("task: switched into demo task OK\n");
+    switch_to(g_demo_task, g_boot_task);
+    /* Not reached: the demo task never runs again this session. */
+}
+
+static void task_switch_smoke(pmm_t *pmm, heap_t *heap)
+{
+    g_boot_task = task_create(pmm, heap);
+    g_demo_task = task_create(pmm, heap);
+    if (!g_boot_task || !g_demo_task) {
+        kprint_puts("task: switch smoke FAILED (task_create returned NULL)\n");
+        return;
+    }
+    task_start(g_demo_task, demo_task_entry, NULL);
+
+    kprint_puts("task: switching to demo task\n");
+    switch_to(g_boot_task, g_demo_task);
+    kprint_puts("task: back in kernel_main after round-trip\n");
+
+    task_destroy(pmm, heap, g_boot_task);
+    task_destroy(pmm, heap, g_demo_task);
+}
+
 /* Ticks per second for the periodic timer smoke test. Fast enough to log
  * several ticks within the fixed QEMU run window documented in CLAUDE.md
  * (serial capture, sleep 3, kill), slow enough to keep the log readable. */
@@ -324,6 +357,8 @@ void kernel_main(void *dtb)
     kprint_puts(task_smoke(&pmm, &heap)
                     ? "task: smoke check OK (create/destroy)\n"
                     : "task: smoke check FAILED\n");
+
+    task_switch_smoke(&pmm, &heap);
 
     /* Bring up the periodic timer: register its handler and enable it at the
      * distributor before arming the countdown, so there is no window where a
