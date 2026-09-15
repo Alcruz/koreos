@@ -168,6 +168,117 @@ static void test_pmm_exhaustion_then_recovery(void)
     TEST_ASSERT_EQUAL_UINT64(0, pmm_free_pages(&pmm));
 }
 
+/* --- contiguous allocation ----------------------------------------------- */
+
+static void test_pmm_alloc_contig_is_aligned_in_range_and_contiguous(void)
+{
+    memmap_t map;
+    map_over(&map);
+    pmm_t pmm;
+    TEST_ASSERT_TRUE(pmm_init(&map, &pmm));
+
+    size_t before = pmm_free_pages(&pmm);
+    pmm_page_t *run = pmm_alloc_contig(&pmm, 4);
+
+    TEST_ASSERT_NOT_NULL(run);
+    TEST_ASSERT_TRUE(in_ram(run));
+    TEST_ASSERT_EQUAL_UINT64(0, (uintptr_t)run % PAGE_SIZE);
+    TEST_ASSERT_EQUAL_UINT64(before - 4, pmm_free_pages(&pmm));
+
+    /* The whole run is real, writable, contiguous memory. */
+    for (size_t i = 0; i < 4; i++)
+        run[i].bytes[0] = (uint8_t)(0x10 + i);
+    for (size_t i = 0; i < 4; i++)
+        TEST_ASSERT_EQUAL_UINT8(0x10 + i, run[i].bytes[0]);
+}
+
+static void test_pmm_alloc_contig_zero_count_returns_null(void)
+{
+    memmap_t map;
+    map_over(&map);
+    pmm_t pmm;
+    TEST_ASSERT_TRUE(pmm_init(&map, &pmm));
+
+    size_t before = pmm_free_pages(&pmm);
+    TEST_ASSERT_NULL(pmm_alloc_contig(&pmm, 0));
+    TEST_ASSERT_EQUAL_UINT64(before, pmm_free_pages(&pmm));
+}
+
+static void test_pmm_alloc_contig_fails_without_side_effects_when_fragmented(void)
+{
+    memmap_t map;
+    map_over(&map);
+    pmm_t pmm;
+    TEST_ASSERT_TRUE(pmm_init(&map, &pmm));
+
+    /* Drain the whole pool (recording allocation order, which is frame-index
+     * order for a freshly-initialised next-fit cursor over one usable run),
+     * then free back four frames spaced two apart. Plenty of free frames
+     * exist afterwards, but no run of 2 consecutive ones does. */
+    size_t total = pmm_free_pages(&pmm);
+    pmm_page_t **all = malloc(total * sizeof(pmm_page_t *));
+    TEST_ASSERT_NOT_NULL(all);
+
+    size_t n = 0;
+    for (;;) {
+        pmm_page_t *q = pmm_alloc_page(&pmm);
+        if (!q)
+            break;
+        all[n++] = q;
+    }
+    TEST_ASSERT_EQUAL_UINT64(total, n);
+
+    size_t mid = n / 2;
+    pmm_free_page(&pmm, all[mid]);
+    pmm_free_page(&pmm, all[mid + 2]);
+    pmm_free_page(&pmm, all[mid + 4]);
+    pmm_free_page(&pmm, all[mid + 6]);
+
+    size_t before = pmm_free_pages(&pmm);
+    TEST_ASSERT_EQUAL_UINT64(4, before);
+    TEST_ASSERT_NULL(pmm_alloc_contig(&pmm, 2));
+    TEST_ASSERT_EQUAL_UINT64(before, pmm_free_pages(&pmm)); /* untouched */
+
+    free(all);
+}
+
+static void test_pmm_free_contig_returns_run_to_pool(void)
+{
+    memmap_t map;
+    map_over(&map);
+    pmm_t pmm;
+    TEST_ASSERT_TRUE(pmm_init(&map, &pmm));
+
+    size_t before = pmm_free_pages(&pmm);
+    pmm_page_t *run = pmm_alloc_contig(&pmm, 4);
+    TEST_ASSERT_NOT_NULL(run);
+    TEST_ASSERT_EQUAL_UINT64(before - 4, pmm_free_pages(&pmm));
+
+    pmm_free_contig(&pmm, run, 4);
+    TEST_ASSERT_EQUAL_UINT64(before, pmm_free_pages(&pmm));
+
+    /* Pool is whole again, so the same run can be allocated once more. */
+    pmm_page_t *again = pmm_alloc_contig(&pmm, 4);
+    TEST_ASSERT_EQUAL_PTR(run, again);
+}
+
+static void test_pmm_free_contig_ignores_invalid_pointers(void)
+{
+    memmap_t map;
+    map_over(&map);
+    pmm_t pmm;
+    TEST_ASSERT_TRUE(pmm_init(&map, &pmm));
+
+    size_t before = pmm_free_pages(&pmm);
+
+    pmm_free_contig(&pmm, NULL, 4);                            /* below base   */
+    pmm_free_contig(&pmm, (pmm_page_t *)(ram + 1), 4);         /* misaligned   */
+    pmm_free_contig(&pmm, (pmm_page_t *)(ram + RAM_BYTES), 4); /* past end     */
+    pmm_free_contig(&pmm, (pmm_page_t *)ram, 0);               /* zero count   */
+
+    TEST_ASSERT_EQUAL_UINT64(before, pmm_free_pages(&pmm)); /* nothing changed */
+}
+
 /* --- robustness -------------------------------------------------------- */
 
 static void test_pmm_free_ignores_invalid_pointers(void)
@@ -234,6 +345,11 @@ int main(void)
     RUN_TEST(test_pmm_alloc_is_aligned_in_range_and_distinct);
     RUN_TEST(test_pmm_free_returns_frame_to_pool);
     RUN_TEST(test_pmm_exhaustion_then_recovery);
+    RUN_TEST(test_pmm_alloc_contig_is_aligned_in_range_and_contiguous);
+    RUN_TEST(test_pmm_alloc_contig_zero_count_returns_null);
+    RUN_TEST(test_pmm_alloc_contig_fails_without_side_effects_when_fragmented);
+    RUN_TEST(test_pmm_free_contig_returns_run_to_pool);
+    RUN_TEST(test_pmm_free_contig_ignores_invalid_pointers);
     RUN_TEST(test_pmm_free_ignores_invalid_pointers);
     RUN_TEST(test_pmm_double_free_is_idempotent);
     RUN_TEST(test_pmm_reserved_region_never_allocated);

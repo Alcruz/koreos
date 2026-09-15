@@ -45,6 +45,19 @@ pmm_page_t *pmm_alloc_page(pmm_t *pmm);
  * managed RAM, or not frame-aligned, are ignored. */
 void pmm_free_page(pmm_t *pmm, pmm_page_t *page);
 
+/* Allocate `count` physically contiguous 4 KiB frames (a first-fit scan for a
+ * run of free bits). Returns the base frame, or NULL if no such run exists or
+ * count is 0 — the bitmap is untouched on failure. The returned memory is not
+ * zeroed. Callers that need a whole, page-aligned physical region (e.g. a
+ * kernel stack a guard page can later be carved below) use this instead of
+ * pmm_alloc_page(), which only guarantees one frame at a time. */
+pmm_page_t *pmm_alloc_contig(pmm_t *pmm, size_t count);
+
+/* Return `count` frames previously handed out by pmm_alloc_contig() as a
+ * single run starting at `base`. Same bounds/alignment guards as
+ * pmm_free_page(), applied per frame. */
+void pmm_free_contig(pmm_t *pmm, pmm_page_t *base, size_t count);
+
 size_t pmm_free_pages(const pmm_t *pmm);
 size_t pmm_total_pages(const pmm_t *pmm);
 
