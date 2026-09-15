@@ -24,13 +24,15 @@ UNITY_SRC := unity/unity.c
 # harmless; add here as new suites need them. Modules with unresolved externals
 # (e.g. kprint.c needs a serial backend) can't live here — see EXTRA_* below.
 KERNEL_SRC := ../kernel/mm/pmm.c ../kernel/mm/memmap.c ../kernel/mm/kmalloc.c \
-              ../kernel/lib/string.c ../kernel/drivers/fdt/fdt.c \
-              ../kernel/core/task.c
+              ../kernel/lib/string.c ../kernel/drivers/fdt/fdt.c
 
 # Per-suite extra sources, appended only to that one suite's link. kprint.c calls
 # the serial backend, which test_kprint.c stubs out, so it must not be linked
-# into suites that don't provide that stub.
+# into suites that don't provide that stub. task.c references task_trampoline,
+# defined in the arm64 asm stub, so it lives here too — test_task.c provides a
+# host stub.
 EXTRA_kprint := ../kernel/lib/kprint.c
+EXTRA_task   := ../kernel/core/task.c
 
 # test_pmm.c -> build/pmm, etc.
 SUITES := $(patsubst test_%.c,$(BUILD)/%,$(wildcard test_*.c))

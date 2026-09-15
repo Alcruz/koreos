@@ -121,6 +121,33 @@ static void test_task_destroy_ignores_null(void)
     task_destroy(&pmm, &heap, NULL); /* must not crash */
 }
 
+/* task_start references the AArch64 trampoline defined in
+ * arch/arm64/task/trampoline.S, which isn't linked into the host tests.
+ * Provide a dummy symbol here so task.c links; we only assert on the
+ * address it was primed with, never dispatch through it. */
+void task_trampoline(void) {}
+
+static void demo_entry(void *arg) { (void)arg; }
+
+static void test_task_start_primes_ctx_for_first_entry(void)
+{
+    task_t *t = task_create(&pmm, &heap);
+    TEST_ASSERT_NOT_NULL(t);
+
+    int arg_value = 0;
+    task_start(t, demo_entry, &arg_value);
+
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uintptr_t)demo_entry, t->ctx.x19);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uintptr_t)&arg_value, t->ctx.x20);
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uintptr_t)&task_trampoline, t->ctx.lr);
+
+    /* sp must survive priming untouched — task_create set it. */
+    TEST_ASSERT_EQUAL_UINT64((uint64_t)(uintptr_t)t->stack_base + TASK_STACK_SIZE,
+                              t->ctx.sp);
+
+    task_destroy(&pmm, &heap, t);
+}
+
 static void test_task_stack_is_real_writable_memory(void)
 {
     task_t *t = task_create(&pmm, &heap);
@@ -144,5 +171,6 @@ int main(void)
     RUN_TEST(test_task_create_and_destroy_round_trip_frames_and_heap);
     RUN_TEST(test_task_destroy_ignores_null);
     RUN_TEST(test_task_stack_is_real_writable_memory);
+    RUN_TEST(test_task_start_primes_ctx_for_first_entry);
     return UNITY_END();
 }
