@@ -18,7 +18,7 @@ kernel:
 # Host-side unit tests, built with the native compiler. Runs the whole suite
 # and exits nonzero on any failure. See tests/.
 test:
-	cd tests && $(MAKE) test
+	cd tests/unit && $(MAKE) test
 
 # On-target smoke tests: each tests/smoke/test_*.c is linked into its own
 # kernel image and booted in its own QEMU invocation. See scripts/run-smoke.sh.
@@ -27,7 +27,7 @@ smoke:
 
 clean:
 	cd kernel && $(MAKE) clean
-	cd tests && $(MAKE) clean
+	cd tests/unit && $(MAKE) clean
 
 run: kernel
 	./scripts/run-qemu.sh
