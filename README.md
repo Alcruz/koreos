@@ -1,73 +1,60 @@
 # Koreos — AArch64 OS from Scratch
 
-# Overview
-
 KoreOS is a homemade 64-bit ARM (AArch64) operating system, written from
 scratch for educational purposes.
 
-## Toolchain: Docker
+## Quickstart
 
-The `aarch64-linux-gnu-*` tools and `qemu-system-aarch64` live only in the toolchain
-container (`toolchain/Dockerfile`). Always build and run inside Docker. The repo
-is mounted at `/workspace` inside the container.
+| Command       | What it does                                                  |
+| ------------- | ------------------------------------------------------------- |
+| `make kernel` | Cross-compile the kernel. Produces `build/kernel.bin`.        |
+| `make run`    | Boot `kernel.bin` on QEMU virt, headless, serial to stdout.   |
+| `make test`   | Host-native Unity suites under `tests/unit/` (ASan + UBSan).  |
+| `make smoke`  | On-target smoke tests: each `tests/smoke/test_*.c` gets its own kernel image and QEMU run. |
 
-### Build the kernel
+`make kernel`, `make run`, and `make smoke` need the cross-toolchain and
+`qemu-system-aarch64` on `PATH`. The easiest way is to run them inside the
+toolchain container:
 
 ```bash
 docker compose -f toolchain/docker-compose.yml run --rm toolchain make kernel
 ```
 
-This produces `build/kernel.elf` and `build/kernel.bin`. **Boot the raw
-`kernel.bin`** — `entry.S` carries an arm64 Linux Image header so
-QEMU loads it at the 2 MB-aligned RAM base (`0x40000000`) and passes the DTB
-pointer in `x0`. Booting the ELF loses the DTB and panics.
+`make test` is plain host C and needs no Docker.
 
-### Boot in QEMU (headless, serial to a file)
+## Toolchain
 
-```bash
-docker compose -f toolchain/docker-compose.yml run --rm toolchain bash -c \
-  'qemu-system-aarch64 -no-user-config -nodefaults -machine virt -cpu cortex-a57 \
-     -m 512M -kernel /workspace/build/kernel.bin -serial file:/tmp/q.log -display none & \
-   QPID=$!; sleep 3; kill -9 $QPID; cat /tmp/q.log'
-```
-
-(`scripts/run-qemu.sh` wraps this but assumes QEMU is on `PATH`, so run it inside
-the container too.)
-
-### Host-side unit tests
-
-Kernel modules are plain, address-agnostic C, so the memory/library code is
-tested natively on the host — no QEMU. Tests use the [Unity](tests/unity/)
-framework and build with AddressSanitizer + UndefinedBehaviorSanitizer.
-
-```bash
-make test        # native host compiler; no Docker needed
-```
-
-Suites live in `tests/` (`test_pmm`, `test_memmap`, `test_kmalloc`,
-`test_string`, `test_fdt`, `test_kprint`).
+The `aarch64-linux-gnu-*` cross-tools and `qemu-system-aarch64` live only
+in `toolchain/Dockerfile`; the repo is mounted at `/workspace` inside the
+container. `scripts/run-qemu.sh` is the QEMU wrapper and expects to be
+called inside the container (or with QEMU on `PATH`).
 
 ## Layout
 
 ```
 koreos/
 ├── kernel/
-│   ├── arch/arm64/boot/    # entry.S (Image header, BSS zero, stack), vectors.S, linker.ld
-│   ├── core/               # kernel_main, exception handlers, panic
-│   ├── drivers/serial/     # PL011 UART driver
-│   ├── mm/                 # memmap, pmm (frame allocator), kmalloc (heap), mmu
-│   ├── lib/                # fdt parser, kprint, string
-│   └── include/            # kernel headers
-├── tests/                  # Unity host-side unit tests
-├── toolchain/              # Docker cross-toolchain + QEMU
-├── scripts/                # QEMU runner, toolchain shell
+│   ├── arch/arm64/boot/
+│   ├── core/
+│   ├── drivers/serial/
+│   ├── mm/
+│   ├── lib/
+│   └── include/
+├── tests/
+│   ├── unit/               # Unity host-side unit tests (one binary per test_*.c)
+│   └── smoke/              # On-target QEMU smoke tests
+├── toolchain/
+├── scripts/
 └── tools/
 ```
 
 ## Boot flow
 
 1. QEMU loads `kernel.bin` at `0x40000000` and enters `_start` (`entry.S`).
-   `x0` = device tree blob (DTB) pointer.
+   `x0` = device tree blob (DTB) pointer. **Boot the raw `kernel.bin`** —
+   `entry.S` carries an arm64 Linux Image header so QEMU loads it at the
+   2 MB-aligned RAM base and passes the DTB in `x0`. Booting the ELF loses
+   the DTB and panics.
 2. `_start` zeros BSS, sets up the stack, installs the EL1 exception vector
    table (`vectors.S`), and calls `kernel_main(dtb)`.
 3. `kernel_main` (`kernel/core/main.c`):
@@ -83,25 +70,10 @@ koreos/
      (`kmalloc`) with a smoke check.
    - Enters the idle loop (`wfe`).
 
-## Implemented
+## Roadmap
 
-- [x] Direct kernel boot on QEMU virt (arm64 Image header, DTB in `x0`)
-- [x] PL011 UART serial + `kprint` (strings, hex, decimal)
-- [x] Flattened device tree (FDT) parsing, `/memory` sizing
-- [x] Physical memory map (`memmap`) with reservations
-- [x] Physical frame allocator (`pmm`)
-- [x] Kernel heap allocator (`kmalloc`/`kfree`/`kzalloc`)
-- [x] MMU: `MAIR` setup, identity page tables, translation enabled
-- [x] EL1 exception vectors + `panic`
-- [x] Host-side unit test harness (Unity, ASan/UBSan)
-
-## Next steps
-
-- [ ] Interrupt handling (GIC driver)
-- [ ] Task scheduler
-- [ ] Higher-half kernel / proper virtual memory layout
-- [ ] More drivers (timer, block, network)
-- [ ] Userspace, syscalls, init & shell
+See [`docs/roadmap/`](docs/roadmap/) for the phased roadmap (goals,
+deliverables, and current status per phase).
 
 ## Resources
 
