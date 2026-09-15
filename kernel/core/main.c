@@ -4,6 +4,7 @@
 #include "../include/core/fdt.h"
 #include "../include/pmm.h"
 #include "../include/kmalloc.h"
+#include "../include/task.h"
 #include "../include/mmu.h"
 #include "../include/mmio.h"
 #include "../include/core/irqchip/gicv2.h"
@@ -167,6 +168,41 @@ static int heap_smoke(heap_t *h)
     return 1;
 }
 
+/* Smoke check that task allocation is sound: two tasks get distinct,
+ * page-aligned, non-overlapping stacks and correctly accounted frames/heap
+ * bytes, and destroying them returns everything to the pools. Returns
+ * nonzero on pass. */
+static int task_smoke(pmm_t *pmm, heap_t *heap)
+{
+    size_t pages_before = pmm_free_pages(pmm);
+    size_t heap_before = heap_free_bytes(heap);
+
+    task_t *a = task_create(pmm, heap);
+    task_t *b = task_create(pmm, heap);
+    if (!a || !b)
+        return 0;
+
+    int ok = a != b && a->id != b->id;
+    ok = ok && ((uintptr_t)a->stack_base % PAGE_SIZE) == 0;
+    ok = ok && ((uintptr_t)b->stack_base % PAGE_SIZE) == 0;
+    ok = ok && (a->ctx.sp % 16) == 0 && (b->ctx.sp % 16) == 0;
+
+    /* Stacks must not overlap. */
+    uintptr_t a_lo = (uintptr_t)a->stack_base, a_hi = a_lo + TASK_STACK_SIZE;
+    uintptr_t b_lo = (uintptr_t)b->stack_base, b_hi = b_lo + TASK_STACK_SIZE;
+    ok = ok && (a_hi <= b_lo || b_hi <= a_lo);
+
+    ok = ok && pmm_free_pages(pmm) == pages_before - 2 * TASK_STACK_PAGES;
+
+    task_destroy(pmm, heap, a);
+    task_destroy(pmm, heap, b);
+
+    ok = ok && pmm_free_pages(pmm) == pages_before;
+    ok = ok && heap_free_bytes(heap) == heap_before;
+
+    return ok;
+}
+
 /* Ticks per second for the periodic timer smoke test. Fast enough to log
  * several ticks within the fixed QEMU run window documented in CLAUDE.md
  * (serial capture, sleep 3, kill), slow enough to keep the log readable. */
@@ -284,6 +320,10 @@ void kernel_main(void *dtb)
     kprint_puts(heap_smoke(&heap)
                     ? "heap: smoke check OK (alloc/free/zero)\n"
                     : "heap: smoke check FAILED\n");
+
+    kprint_puts(task_smoke(&pmm, &heap)
+                    ? "task: smoke check OK (create/destroy)\n"
+                    : "task: smoke check FAILED\n");
 
     /* Bring up the periodic timer: register its handler and enable it at the
      * distributor before arming the countdown, so there is no window where a

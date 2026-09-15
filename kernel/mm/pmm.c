@@ -126,5 +126,48 @@ void pmm_free_page(pmm_t *pmm, pmm_page_t *page)
     }
 }
 
+/* True if frames [start, start + count) are all within range and clear. */
+static bool run_is_free(const pmm_t *pmm, size_t start, size_t count)
+{
+    if (start + count > pmm->total_frames)
+        return false;
+    for (size_t i = start; i < start + count; i++)
+        if (bm_test(pmm, i))
+            return false;
+    return true;
+}
+
+pmm_page_t *pmm_alloc_contig(pmm_t *pmm, size_t count)
+{
+    if (count == 0 || count > pmm->total_frames)
+        return NULL;
+
+    for (size_t start = 0; start + count <= pmm->total_frames; start++) {
+        if (!run_is_free(pmm, start, count))
+            continue;
+        for (size_t i = start; i < start + count; i++)
+            bm_set(pmm, i);
+        pmm->free_count -= count;
+        return (pmm_page_t *)(uintptr_t)(pmm->base + ((uint64_t)start << PAGE_SHIFT));
+    }
+    return NULL;
+}
+
+void pmm_free_contig(pmm_t *pmm, pmm_page_t *base, size_t count)
+{
+    uint64_t p = (uint64_t)(uintptr_t)base;
+    if (count == 0 || p < pmm->base || p >= pmm->end || (p & (PAGE_SIZE - 1)))
+        return;
+    size_t start = (size_t)((p - pmm->base) >> PAGE_SHIFT);
+    if (start + count > pmm->total_frames)
+        return;
+    for (size_t i = start; i < start + count; i++) {
+        if (bm_test(pmm, i)) {
+            bm_clear(pmm, i);
+            pmm->free_count++;
+        }
+    }
+}
+
 size_t pmm_free_pages(const pmm_t *pmm)  { return pmm->free_count; }
 size_t pmm_total_pages(const pmm_t *pmm) { return pmm->total_frames; }

@@ -1,6 +1,10 @@
 .section .text.boot
 .global _start
 
+// arm64 Linux Image header (64 bytes). Keep it even though this QEMU
+// (6.2, arm_load_kernel) ignores text_offset for raw -kernel blobs — a
+// different loader (u-boot, real firmware) may honor it. code0 branches
+// past the header to _start_main.
 _start:
     b       _start_main         // code0: branch past the 64-byte header
     .long   0                   // code1 (reserved)
@@ -14,11 +18,14 @@ _start:
     .long   0                   // res5 (PE/COFF header offset, unused)
 
 _start_main:
-    // x0 = device tree blob address (passed by QEMU)
+    // x0 = device tree blob pointer, passed by QEMU. Preserve it all the
+    // way to kernel_main — kernel_main panics if it doesn't get a valid
+    // DTB rather than guess RAM size. Use x9+ for any scratch below.
     ldr x30, =_stack_end
     mov sp, x30
 
-    // Zero the BSS (uninitialized globals).
+    // Zero BSS (_bss_start.._bss_end, 8-byte aligned) before any C code
+    // runs — nothing else does it, and C globals rely on it.
     ldr x9, =_bss_start
     ldr x10, =_bss_end
 1:  cmp x9, x10
